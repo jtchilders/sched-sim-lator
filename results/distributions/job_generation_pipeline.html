@@ -1,0 +1,192 @@
+<!doctype html>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Job Generation Pipeline</title>
+<style>
+  :root {
+    --bg: #0a1628;
+    --fg: #e6f1ff;
+    --muted: #8892b0;
+    --line: #8892b0;
+    --neutral: #1d3461;
+    --input: #1a5276;
+    --process: #1a3c5e;
+    --storage: #0f766e;
+    --decision: #7c4a1e;
+    --output: #4a1a6b;
+    --accent: #64ffda;
+    --accent2: #57cbff;
+    --warn: #ffb347;
+    --pink: #ff6b8a;
+  }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; }
+  main { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  svg { width: 100%; height: auto; display: block; }
+  .label { font-size: 14px; font-weight: 600; fill: var(--fg); }
+  .small { font-size: 12px; fill: var(--muted); }
+  .tiny { font-size: 11px; fill: var(--muted); }
+  .node { stroke: var(--line); stroke-width: 1.5; }
+  .edge { stroke: var(--line); stroke-width: 1.5; fill: none; }
+  .edge-accent { stroke: var(--accent); stroke-width: 1.5; fill: none; }
+  .edge-warn { stroke: var(--warn); stroke-width: 1.5; fill: none; }
+  .edge-pink { stroke: var(--pink); stroke-width: 1.5; fill: none; }
+</style>
+<main>
+<svg viewBox="0 0 1100 680" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 7" refX="9" refY="3.5"
+      markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#8892b0"/>
+    </marker>
+    <marker id="arrow-accent" viewBox="0 0 10 7" refX="9" refY="3.5"
+      markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#64ffda"/>
+    </marker>
+    <marker id="arrow-warn" viewBox="0 0 10 7" refX="9" refY="3.5"
+      markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#ffb347"/>
+    </marker>
+    <marker id="arrow-pink" viewBox="0 0 10 7" refX="9" refY="3.5"
+      markerWidth="8" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 3.5 L 0 7 z" fill="#ff6b8a"/>
+    </marker>
+  </defs>
+
+  <!-- Title -->
+  <text x="550" y="30" text-anchor="middle" font-size="20" font-weight="700" fill="#64ffda">Monte Carlo Job Generation Pipeline</text>
+
+  <!-- ═══ EDGES (drawn first, behind nodes) ═══ -->
+
+  <!-- Step 1 → Step 2 -->
+  <path d="M 200 115 L 200 145" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- Step 2 → Step 3 -->
+  <path d="M 200 215 L 200 255" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- Step 3 → Decision diamond -->
+  <path d="M 200 325 L 200 370" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- Decision → Interior (left) -->
+  <path d="M 130 405 L 60 405 L 60 445" class="edge-accent" marker-end="url(#arrow-accent)"/>
+  <text x="55" y="435" class="tiny" fill="#64ffda">Interior</text>
+
+  <!-- Decision → Cap-packer (right) -->
+  <path d="M 270 405 L 340 405 L 340 445" class="edge-warn" marker-end="url(#arrow-warn)"/>
+  <text x="310" y="435" class="tiny" fill="#ffb347">Cap-packer</text>
+
+  <!-- Interior → Merge -->
+  <path d="M 60 515 L 60 560 L 180 560" class="edge-accent" marker-end="url(#arrow-accent)"/>
+
+  <!-- Cap-packer → Merge -->
+  <path d="M 340 515 L 340 560 L 220 560" class="edge-warn" marker-end="url(#arrow-warn)"/>
+
+  <!-- Merge → Step 5 -->
+  <path d="M 200 575 L 200 600" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- Step 5 → Output -->
+  <path d="M 300 635 L 410 635" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- ═══ DATA SOURCE (right side) ═══ -->
+
+  <!-- Aurora DB -->
+  <rect x="680" y="65" width="340" height="50" rx="6" class="node" fill="#0f766e" opacity="0.7"/>
+  <text x="850" y="88" text-anchor="middle" class="label">Aurora Production Traces</text>
+  <text x="850" y="103" text-anchor="middle" class="small">416,011 finished jobs · 357 days</text>
+
+  <!-- Empirical distributions box -->
+  <rect x="680" y="145" width="340" height="190" rx="6" class="node" fill="#1d3461" opacity="0.6"/>
+  <text x="850" y="168" text-anchor="middle" class="label" fill="#57cbff">Empirical Distributions (per bucket)</text>
+
+  <text x="700" y="195" class="small">▸ Node count arrays</text>
+  <text x="700" y="215" class="small">▸ Interior walltime arrays</text>
+  <text x="700" y="235" class="small">▸ Cap-packer walltime arrays</text>
+  <text x="700" y="255" class="small">▸ Runtime / walltime ratio arrays</text>
+  <text x="700" y="275" class="small">▸ Per-bucket arrival rates (λ)</text>
+  <text x="700" y="300" class="small">▸ Cap-packer fraction per bucket</text>
+  <text x="700" y="320" class="tiny" fill="#8892b0">Fit once from DB, cached to disk</text>
+
+  <!-- DB → distributions arrow -->
+  <path d="M 850 115 L 850 145" class="edge" marker-end="url(#arrow)"/>
+
+  <!-- distributions → Step 1 arrow -->
+  <path d="M 680 195 L 580 195 L 580 80 L 300 80" class="edge-accent" marker-end="url(#arrow-accent)"/>
+  <text x="440" y="73" class="tiny" fill="#64ffda">λ per bucket</text>
+
+  <!-- distributions → Step 2 arrow -->
+  <path d="M 680 215 L 580 215 L 580 180 L 300 180" class="edge-accent" marker-end="url(#arrow-accent)"/>
+  <text x="400" y="173" class="tiny" fill="#64ffda">node count pool</text>
+
+  <!-- distributions → Decision arrow -->
+  <path d="M 680 280 L 400 280 L 400 405 L 270 405" class="edge-accent" marker-end="url(#arrow-accent)"/>
+  <text x="420" y="340" class="tiny" fill="#64ffda">cap-packer frac</text>
+
+  <!-- distributions → Interior -->
+  <path d="M 680 235 L 500 235 L 500 480 L 160 480" class="edge-accent" marker-end="url(#arrow-accent)"/>
+
+  <!-- distributions → Cap-packer -->
+  <path d="M 680 255 L 520 255 L 520 480 L 440 480" class="edge-warn" marker-end="url(#arrow-warn)"/>
+
+  <!-- distributions → Step 5 -->
+  <path d="M 680 275 L 540 275 L 540 635 L 300 635" class="edge-pink" marker-end="url(#arrow-pink)"/>
+  <text x="545" y="610" class="tiny" fill="#ff6b8a">ratio pool</text>
+
+  <!-- ═══ NODES (process steps) ═══ -->
+
+  <!-- Step 1: Arrival time -->
+  <rect x="50" y="55" width="300" height="60" rx="8" class="node" fill="#1a5276"/>
+  <text x="65" y="78" class="label">① Draw inter-arrival time</text>
+  <text x="65" y="98" class="small">Δt ~ Exponential(1/λ)  →  submit_time</text>
+
+  <!-- Step 2: Node count -->
+  <rect x="50" y="145" width="300" height="70" rx="8" class="node" fill="#1a5276"/>
+  <text x="65" y="170" class="label">② Sample node count</text>
+  <text x="65" y="190" class="small">Draw from empirical node array</text>
+  <text x="65" y="207" class="small">Clip to [min_nodes, max_nodes]</text>
+
+  <!-- Step 3: Two-component walltime -->
+  <rect x="50" y="255" width="300" height="70" rx="8" class="node" fill="#1a5276"/>
+  <text x="65" y="278" class="label">③ Two-component walltime</text>
+  <text x="65" y="298" class="small">Roll U ~ Uniform(0,1)</text>
+  <text x="65" y="315" class="small">Compare against cap-packer fraction</text>
+
+  <!-- Decision diamond -->
+  <polygon points="200,370 270,405 200,440 130,405" class="node" fill="#7c4a1e" opacity="0.8"/>
+  <text x="200" y="409" text-anchor="middle" class="small" fill="#e6f1ff">U &lt; frac?</text>
+
+  <!-- Interior branch -->
+  <rect x="0" y="450" width="160" height="65" rx="6" class="node" fill="#0f766e" opacity="0.7"/>
+  <text x="12" y="472" class="small" fill="#e6f1ff">Keep original</text>
+  <text x="12" y="489" class="small" fill="#e6f1ff">walltime shape</text>
+  <text x="12" y="506" class="tiny" fill="#99f6e4">Clip to new cap</text>
+
+  <!-- Cap-packer branch -->
+  <rect x="240" y="450" width="200" height="65" rx="6" class="node" fill="#7c4a1e" opacity="0.7"/>
+  <text x="252" y="472" class="small" fill="#e6f1ff">Draw from capacity</text>
+  <text x="252" y="489" class="small" fill="#e6f1ff">dist × (new_cap / 168h)</text>
+  <text x="252" y="506" class="tiny" fill="#ffb347">Rescale to new cap</text>
+
+  <!-- Step 5: Runtime -->
+  <rect x="50" y="605" width="250" height="55" rx="8" class="node" fill="#1a5276"/>
+  <text x="65" y="628" class="label">④ Sample runtime</text>
+  <text x="65" y="648" class="small">ratio ~ empirical  →  rt = ratio × wt</text>
+
+  <!-- Output -->
+  <rect x="410" y="610" width="220" height="50" rx="25" class="node" fill="#4a1a6b" opacity="0.8"/>
+  <text x="520" y="633" text-anchor="middle" class="label" fill="#e6f1ff">Job ready</text>
+  <text x="520" y="650" text-anchor="middle" class="tiny" fill="#c4b5fd">(nodes, wt, rt, submit_t)</text>
+
+  <!-- Legend -->
+  <rect x="680" y="400" width="340" height="140" rx="6" class="node" fill="#1d3461" opacity="0.4"/>
+  <text x="700" y="425" class="label" fill="#8892b0">Legend</text>
+  <line x1="700" y1="442" x2="740" y2="442" stroke="#64ffda" stroke-width="2"/>
+  <text x="748" y="446" class="small" fill="#64ffda">Empirical data flow</text>
+  <line x1="700" y1="465" x2="740" y2="465" stroke="#ffb347" stroke-width="2"/>
+  <text x="748" y="469" class="small" fill="#ffb347">Cap-packer path</text>
+  <line x1="700" y1="488" x2="740" y2="488" stroke="#ff6b8a" stroke-width="2"/>
+  <text x="748" y="492" class="small" fill="#ff6b8a">Runtime ratio flow</text>
+  <line x1="700" y1="511" x2="740" y2="511" stroke="#8892b0" stroke-width="2"/>
+  <text x="748" y="515" class="small">Process flow</text>
+
+</svg>
+</main>

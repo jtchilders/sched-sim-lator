@@ -1,0 +1,19 @@
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Data caches (regenerated from DB)
+*.pkl
+*.trace_cache.pkl
+*.fitted_cache.pkl
+
+# Local DB (never commit data)
+*.db
+*.sqlite
+
+# Large generated artifacts (tracked via results/MANIFEST.md instead)
+results/**/*.png
+results/**/*.csv
+slides.html
