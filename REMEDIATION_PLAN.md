@@ -285,7 +285,31 @@ Decision-ready (0+2+3+4): **~5–6 days**. Full hardening incl. 1+5+6: **~8–10
 
 ---
 
-## Open questions for Taylor
+## Decisions from Taylor (2026-06-19) — these override the defaults below
+
+1. **Genesis share comes from existing shares**, configurable. Default split
+   INCITE/ALCC/DD/Genesis = **50/25/10/15%**.
+2. **Genesis = AI-centric**: small jobs, long runtime — heavily dominated by
+   **1-node, 7-day** jobs. Starts slow **mid-July 2026**, ramps up by
+   **Sept/Oct 2026**.
+3. **Model Aurora** (10,624 nodes) for now.
+4. **Burn is averaged over the year, not instantaneous.** Projects ramp slowly
+   at program-year start and finish strong; the 13th month just exploits the
+   slow start. Same allocation split, but it's a yearly average target, not an
+   instantaneous one. ⇒ model demand with a realistic intra-year burn curve;
+   judge share compliance over the *year*, not at every instant.
+5. **DD 10% is a soft goal**, fine to exceed when capacity is idle.
+6. **Fair-share is NOT enforced.** ALCF allocates and *aims* for each project to
+   fully use its allocation; many under-use. The lever is **allocation budgets
+   with overburn tolerance**, not a fair-share steering term. **INCITE may run
+   up to +25% over allocation** to compensate for projects that under-utilize.
+   ⇒ Scheduler model: per-program budget with a configurable overburn cap
+   (INCITE 1.25×, others configurable); priority damps as a program approaches
+   its budget but is not hard-blocked until the overburn ceiling.
+
+---
+
+## Open questions for Taylor (resolved above; kept for provenance)
 
 These affect Phase 2 modeling choices. None block starting — I'll use the noted
 defaults if you don't weigh in.
