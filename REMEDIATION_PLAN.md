@@ -1,9 +1,21 @@
 # Remediation Plan — PBS Queue Simulator
 
-Author: Wesley (⚛️) · 2026-06-19
+Author: Wesley (⚛️) · 2026-06-19 (rev 2 — adds program profiles & Genesis)
 Companion to: `ANALYSIS_REVIEW.md`
+Repo: https://github.com/jtchilders/sched-sim-lator (pushed as `jtchilders-ai-assistant`)
 Goal: make this tool able to answer the **INCITE/ALCC vs Genesis Mission
 balancing** question, with reproducible, defensible results.
+
+## Status (rev 2)
+
+- **Phase 0 DONE:** repo initialized, baseline committed + tagged `v1-baseline`,
+  pushed to `jtchilders/sched-sim-lator`. `.gitignore` excludes venv/caches/DB/
+  large artifacts. (Remaining Phase 0 items — dep pinning, env-var DB path,
+  RUNBOOK — folded into Phase 1.)
+- **Key discovery:** the pbs_monitor DB already has the program label we need.
+  The `jobs` table has both `allocation_type` (INCITE / ALCC / Discretionary /
+  UNKNOWN) and `project`. **Program profiles can be fully data-driven**, not
+  guessed. Empirical facts below now anchor Phase 2.
 
 ---
 
@@ -20,20 +32,61 @@ balancing** question, with reproducible, defensible results.
 
 ---
 
-## Phase 0 — Foundation & reproducibility  *(blocks everything; ~0.5 day)*
+## Empirical program facts (from the Aurora DB, 357 days, 416K finished jobs)
+
+These drive the Phase 2 profiles. All from `allocation_type` on FINISHED jobs
+with `nodes>0` and `runtime>=30s`.
+
+**Delivered node-hour share (what actually happened):**
+
+| Program | Jobs | Node-hours | Share | Target |
+|--------|------|-----------|-------|--------|
+| INCITE | 142,435 | 38.9M | **57.0%** | 60% |
+| Discretionary | 230,071 | 20.3M | **29.8%** | 10% |
+| ALCC | 41,540 | 9.0M | **13.2%** | 30% |
+| UNKNOWN | 1,965 | 0.06M | 0.1% | — |
+
+Note the gap between *delivered* and *target* shares — DD massively over-ran its
+10% nominal hold (29.8%), ALCC under-delivered (13.2% vs 30%). That gap is itself
+a finding: the current program-blind policy does not steer toward targets. This
+is the baseline the fair-share lever must improve on.
+
+**Job-size profile (nodes):**
+
+| Program | mean | p50 | p90 | p99 | character |
+|--------|------|-----|-----|-----|-----------|
+| INCITE | 110.8 | 16 | 256 | 2048 | largest, capability-leaning |
+| ALCC | 92.8 | 12 | 256 | 1800 | similar to INCITE, slightly smaller |
+| Discretionary | 87.1 | **1** | 108 | 2048 | bimodal: many 1-node + occasional big |
+
+**Runtime (hours):** ALCC longest (mean 2.55h), INCITE 1.31h, DD shortest
+(0.79h) — DD = lots of short experimental jobs. **Arrival rate:** DD 644/day,
+INCITE 399/day, ALCC 116/day.
+
+**Temporal / calendar structure (the important behavioral signal):**
+- INCITE node-hours **peak Nov 2025 (10.4M)** — year-end burn before the
+  Dec deadline — then collapse to 1.6M by Feb 2026. Classic allocation-year
+  end-of-cycle rush, consistent with the "13th month" extension behavior.
+- ALCC **ramps after its July start**, builds through the spring (peaks
+  May 2026 at 1.8M), consistent with a July–June allocation year.
+- DD is **steady year-round** — small experimental jobs, no strong cycle.
+
+This confirms the calendars you described and means we can fit per-program
+*seasonal burn curves* from data rather than assuming flat demand.
+
+---
+
+## Phase 0 — Foundation & reproducibility  ✅ DONE (repo) / partially deferred
 
 Closes review items **#3** (no VCS) and the reproducibility half of **#2**.
 
-- [ ] `git init`; commit current code as `v1-baseline` tag (snapshot of what
-      produced the existing slides).
-- [ ] `.gitignore`: `.venv/`, `*.pkl` (trace/fitted caches), `__pycache__/`,
-      and large binary outputs. Decide: keep `results/*.png` out of git, commit
-      a `results/MANIFEST.md` that records which SHA + command produced each.
-- [ ] Pin dependencies: freeze `requirements.txt` with versions
-      (numpy/pandas/matplotlib actually used).
-- [ ] Single source of truth for the DB path: one `--trace-db` default read from
-      env var `PBS_SIM_DB` (kills the 3 hard-coded `/Users/jchilders/...` paths).
-- [ ] Add a `RUNBOOK.md`: exact commands to regenerate every figure.
+- [x] `git init`; baseline committed + tagged `v1-baseline`; pushed to GitHub
+      as `jtchilders-ai-assistant`.
+- [x] `.gitignore`: `.venv/`, `*.pkl`, `__pycache__/`, `*.db`, large outputs.
+- [ ] *(→ Phase 1)* `results/MANIFEST.md` recording SHA + command per figure.
+- [ ] *(→ Phase 1)* Pin dependency versions in `requirements.txt`.
+- [ ] *(→ Phase 1)* DB path from env var `PBS_SIM_DB` (kills 3 hard-coded paths).
+- [ ] *(→ Phase 1)* `RUNBOOK.md`: exact commands to regenerate every figure.
 
 **Exit criterion:** fresh clone + `pip install -r requirements.txt` + one
 documented command reproduces a baseline figure.
@@ -60,41 +113,65 @@ a SHA; CV validation passes.
 
 ---
 
-## Phase 2 — Program / allocation dimension  *(the core feature; ~2–3 days)*
+## Phase 2 — Program / allocation dimension  *(the core feature; ~3–4 days)*
 
-Closes **#1** — the reason the tool exists for this decision.
+Closes **#1** — the reason the tool exists for this decision. Now data-grounded
+(see empirical facts above).
 
-### 2a. Data model
-- [ ] Add `program` to `Job` (enum-ish: `INCITE`, `ALCC`, `Genesis`, `DD`).
-- [ ] Discover the real field in the pbs_monitor DB: inspect `jobs` for
-      `account` / `project` / `allocation` columns; build an empirical
-      program → job mapping if it exists. If it doesn't, document that program
-      mix is a *configured input*, not fitted, and expose it as CLI/config.
-- [ ] Extend `trace_sampler` so fits are per **(program × size bucket)** where
-      data supports it; fall back to a configurable program mix per bucket
-      otherwise.
+### 2a. Data model & program profiles
+- [ ] Add `program` to `Job` (`INCITE`, `ALCC`, `DD`, `Genesis`). Map DB
+      `allocation_type` → program (Discretionary→DD; UNKNOWN→drop or fold into
+      DD behind a flag).
+- [ ] **Build a `ProgramProfile` per program**, fitted from the DB:
+  - node-size distribution (per program — they differ: INCITE/ALCC
+    capability-leaning, DD bimodal with a 1-node spike)
+  - walltime/runtime distributions (per program; reuse two-component model but
+    fit threshold/shape per program)
+  - **arrival rate AND seasonal burn curve** — fit a monthly multiplier from
+    each program's node-hour time series so INCITE's Nov burn, ALCC's spring
+    ramp, and DD's flatness are reproduced
+  - allocation **calendar**: INCITE Jan–Dec (+optional 13th-month extension
+    flag through next Jan), ALCC Jul–Jun, DD continuous. The calendar gates
+    when a program's budget resets and shapes its burn curve.
+- [ ] Annual **budget** per program (node-hours) = `target_share ×
+      machine_node_hours_per_year`. Track burn against it; the seasonal curve is
+      how fast each program spends down its budget.
+- [ ] Extend `trace_sampler` to sample per **(program × size bucket)**.
 
-### 2b. Scheduling levers (implement both; they answer different questions)
+### 2b. Genesis Mission profile (doesn't exist yet — scenario-driven)
+- [ ] Genesis has no history, so model it as **configurable scenarios**, each a
+      `ProgramProfile` built from explicit, labeled assumptions. Starter set:
+  - **Genesis-as-INCITE-like:** capability jobs, large nodes, Jan–Dec calendar.
+  - **Genesis-as-bursty-campaign:** AR(1)-bursty arrivals (high ρ), large
+    node-hour surges around mission deadlines, short calendar windows.
+  - **Genesis-as-on-demand/preemptable:** latency-sensitive, gets preemption
+    priority over a preemptable pool (ties to Phase 5).
+  - Each scenario parameterized by: target share, **ramp schedule** (Genesis
+    grows 0→full over N months), size profile, burstiness, calendar.
+- [ ] **Share-reallocation knob** — where does Genesis's share come from?
+      (proportional from all / from INCITE only / from DD only). This is the
+      central policy question; make it a first-class CLI sweep axis.
+
+### 2c. Scheduling levers (implement both; they answer different questions)
 - [ ] **Fair-share term.** Track `delivered_nh[program]`; add
-      `score += fairshare_weight * (target_share[p] - actual_share[p])`.
-      Targets configurable (e.g. INCITE 40% / ALCC 20% / Genesis 30% / DD 10%).
-      This models "steer toward awarded shares" — the ALCF policy mechanism.
-- [ ] **Per-program caps / floors.** Generalize the existing capacity-pool cap:
-      ceiling ("Genesis ≤ X% running node-hours") and/or floor ("INCITE+ALCC
-      guaranteed ≥ Y%"). Models hard contractual guarantees.
-- [ ] Make the lever selectable: `--policy fairshare|caps|none` so we can
-      compare against the current (program-blind) baseline.
+      `score += fairshare_weight * (target_share[p] − actual_share[p])`.
+      Baseline check: confirm the *program-blind* policy reproduces the observed
+      57/30/13 vs 60/30/10 gap (validates the model), then show fair-share pulls
+      delivered shares toward targets.
+- [ ] **Per-program caps / floors.** Generalize the capacity-pool cap: ceiling
+      ("Genesis ≤ X% running node-hours") and/or floor ("INCITE+ALCC ≥ Y%").
+- [ ] Selectable: `--policy blind|fairshare|caps` to compare against baseline.
 
-### 2c. Reporting
-- [ ] New per-program summary table: node-hours delivered vs target share,
-      p50/p95/max wait, starvation flag, jobs unstarted — **this is the decision
-      table.**
-- [ ] New plot: stacked node-hours by program over time vs target share lines.
-- [ ] Keep the existing per-size-bucket reports intact (orthogonal view).
+### 2d. Reporting
+- [ ] Per-program decision table: delivered share vs target, budget burn %,
+      p50/p95/max wait, starvation, unstarted — **the committee table.**
+- [ ] Plot: stacked node-hours by program over time vs target lines + per-program
+      budget burn-down curves against their calendars.
+- [ ] Keep per-size-bucket reports (orthogonal view).
 
-**Exit criterion:** a single run prints "if Genesis target = 30%, INCITE p95
-wait goes from A→B and delivered shares land at X/Y/Z" — i.e. the tradeoff is
-quantified.
+**Exit criterion:** a run prints "under Genesis scenario X taking 15% from
+INCITE, INCITE p95 wait goes A→B, ALCC floor holds at Y%, delivered shares land
+at I/A/G/D" — the tradeoff is quantified per scenario.
 
 ---
 
@@ -180,7 +257,7 @@ Phase 0 (git/repro) ──┬─> Phase 1 (bursty fix) ──┐
 Phase 6 hygiene: interleaved, low risk.
 ```
 
-- **0 first** (everything else needs traceability).
+- **0 done** (repo live; traceability in place).
 - **1 and 2 are independent** and can run in parallel; 2 is the critical path
   for the decision.
 - **3 depends on 1+2** (you CI the program metrics).
@@ -196,21 +273,54 @@ Phase 1 and Phase 5 improve fidelity but are not on that critical path.
 
 | Phase | Item | Est. | On critical path? |
 |------|------|------|------|
-| 0 | Foundation/repro | 0.5d | yes (blocker) |
-| 1 | Bursty fix | 0.5d | no |
-| 2 | Program dimension + levers | 2–3d | **yes** |
-| 3 | Stats/CIs/sensitivity | 1d | yes |
+| 0 | Foundation/repro | ✅ done (repo) | yes (blocker) |
+| 1 | Bursty fix + repro hygiene | 0.5d | no |
+| 2 | Program dimension + profiles + Genesis + levers | 3–4d | **yes** |
+| 3 | Stats/CIs/sensitivity | 1–1.5d | yes |
 | 4 | Narrative reframe | 0.5d | yes |
 | 5 | Scheduler realism | 2–3d | no |
 | 6 | Hygiene | 0.5d | interleaved |
 
-Decision-ready (0+2+3+4): **~4–5 days**. Full hardening incl. 1+5+6: **~7–9 days**.
+Decision-ready (0+2+3+4): **~5–6 days**. Full hardening incl. 1+5+6: **~8–10 days**.
+
+---
+
+## Open questions for Taylor
+
+These affect Phase 2 modeling choices. None block starting — I'll use the noted
+defaults if you don't weigh in.
+
+1. **Genesis share source.** When Genesis takes its share, does it come
+   proportionally from all programs, from INCITE only, or from DD's hold?
+   *Default:* sweep all three and show the tradeoff (it's the headline result).
+2. **Genesis size/character.** Is Genesis expected to be capability
+   (huge jobs), capacity (many small), or mixed? Any known target share or
+   ramp timeline? *Default:* run the 3 starter scenarios (INCITE-like, bursty
+   campaign, on-demand) at a placeholder 15% share ramped over 6 months.
+6. **Machine target.** Keep modeling Aurora (10,624 nodes), or is this meant to
+   inform an ALCF-4 / future-system allocation policy? Affects the annual
+   node-hour budget math. *Default:* Aurora, with node count a CLI knob.
+3. **13th-month extension.** Should I model INCITE's January extension as extra
+   demand overlapping the new year's INCITE start (double-loading Jan)?
+   *Default:* yes, behind a `--incite-13th-month` flag, off by default.
+4. **DD treatment.** DD over-delivered (29.8% vs 10% nominal). Is the 10% a hard
+   cap that *should* be enforced, or a soft floor it's fine to exceed when
+   capacity is idle? This changes whether DD is a cap or a floor in the model.
+   *Default:* soft floor (can exceed when idle), since that matches history.
+5. **Fair-share target shares.** Use the canonical 60/30/10 (INCITE/ALCC/DD) as
+   the fair-share targets, or the *delivered* 57/30/13? *Default:* targets =
+   60/30/10 (the policy intent); show delivered vs target as the result.
 
 ---
 
 ## Proposed first action
 
-On your go: `git init` + Phase 0, then branch `feat/program-dimension` and
-prototype the program tag + fair-share term against the existing fitted sampler
-— without touching current `results/` or `slides.html`. I'll bring back the
-first per-program tradeoff table as the proof-of-concept before going further.
+Phase 0 is done (repo live, baseline tagged). On your go I'll start Phase 2 on
+branch `feat/program-dimension`:
+1. Add a `profile_programs.py` that fits per-program `ProgramProfile`s from the
+   DB and writes a summary + plots (node-size, walltime, seasonal burn curve,
+   calendar) — the empirical foundation, reviewable before any scheduler change.
+2. Add `program` to `Job` + the fair-share scheduler term, validate it
+   reproduces the 57/30/13 baseline under `--policy blind`.
+3. Bring back the first per-program decision table as proof-of-concept.
+All without touching current `results/` or `slides.html`.
