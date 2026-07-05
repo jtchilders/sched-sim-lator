@@ -189,6 +189,9 @@ class JobGenerator:
         cv = self.bursty_cv
         sigma = self._calibrate_sigma(n_days, rho, cv)
 
+        # Stationary variance of the AR(1) log-process: Var = sigma^2 / (1 - rho^2)
+        var_log_m = sigma**2 / (1 - rho**2)
+
         # AR(1) process in log-space (centered at 0 so mean multiplier = exp(var/2))
         log_m = np.zeros(n_days)
         log_m[0] = self.rng.normal(0, np.sqrt(var_log_m))  # draw from stationary dist
@@ -200,29 +203,48 @@ class JobGenerator:
         multipliers *= n_days / multipliers.sum()  # ensure total count is preserved
         return multipliers
 
-    @staticmethod
-    def _calibrate_sigma(n_days: int, rho: float, target_cv: float,
+    # Module-agnostic cache keyed on the deterministic calibration inputs.
+    # _calibrate_sigma depends only on (n_days, rho, target_cv, n_trials) and a
+    # fixed RNG seed, so its result is reproducible; memoize to avoid rerunning
+    # the (expensive) binary search on every bursty sim / multi-seed CI draw.
+    _sigma_cache: dict = {}
+
+    @classmethod
+    def _calibrate_sigma(cls, n_days: int, rho: float, target_cv: float,
                          n_trials: int = 5000) -> float:
-        """Binary search for AR(1) sigma that yields target_cv in n_days."""
+        """Binary search for AR(1) sigma that yields target_cv in n_days.
+
+        Deterministic (fixed seed) and cached on its inputs. The inner Monte
+        Carlo estimate of the finite-window CV is fully vectorized over trials.
+        """
+        key = (n_days, round(rho, 6), round(target_cv, 6), n_trials)
+        cached = cls._sigma_cache.get(key)
+        if cached is not None:
+            return cached
+
         cal_rng = np.random.default_rng(9999)  # fixed seed for reproducibility
         lo, hi = 0.01, 5.0
         for _ in range(40):
             sigma = (lo + hi) / 2
             var_stat = sigma**2 / (1 - rho**2)
-            cvs = []
-            for _ in range(n_trials):
-                log_m = np.zeros(n_days)
-                log_m[0] = cal_rng.normal(0, np.sqrt(var_stat))
-                for i in range(1, n_days):
-                    log_m[i] = rho * log_m[i-1] + sigma * cal_rng.normal()
-                m = np.exp(log_m)
-                m *= n_days / m.sum()
-                cvs.append(np.std(m) / np.mean(m))
+            # Vectorized AR(1): shape (n_trials, n_days). The recursion stays a
+            # Python loop over days (n_days is small), but all trials advance
+            # together as a single vector op.
+            log_m = np.empty((n_trials, n_days))
+            log_m[:, 0] = cal_rng.normal(0, np.sqrt(var_stat), size=n_trials)
+            noise = cal_rng.normal(size=(n_trials, n_days))
+            for i in range(1, n_days):
+                log_m[:, i] = rho * log_m[:, i - 1] + sigma * noise[:, i]
+            m = np.exp(log_m)
+            m *= (n_days / m.sum(axis=1, keepdims=True))  # normalize each trial
+            cvs = m.std(axis=1) / m.mean(axis=1)
             if np.median(cvs) < target_cv:
                 lo = sigma
             else:
                 hi = sigma
-        return (lo + hi) / 2
+        result = (lo + hi) / 2
+        cls._sigma_cache[key] = result
+        return result
 
     def generate(self, duration_h: float) -> list[Job]:
         """Pre-generate all jobs that will arrive during the run window."""
