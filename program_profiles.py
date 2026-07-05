@@ -353,6 +353,74 @@ class GenesisScenario:
 
 
 # ---------------------------------------------------------------------------
+# Convenience: named Genesis scenario factory
+# ---------------------------------------------------------------------------
+
+def genesis_scenario(name: str, share: float) -> GenesisScenario:
+    """
+    Return a labeled GenesisScenario for the given scenario name and share.
+
+    Scenarios
+    ---------
+    ai_default      : AI-centric, 1-node / 7-day dominated, ramp Jul->Oct.
+                      Reflects Taylor's description of Genesis Mission Phase 1.
+    incite_like     : Capability jobs — large node counts (256/512/1024/2048),
+                      6-24h walltimes, rt_ratio close to 1.0. Ramp Jul->Oct.
+    bursty_campaign : Mid-to-large nodes with a rapid seasonal surge.
+                      Ramp compresses to Jul->Aug (fast rise) to approximate
+                      bursty demand; burstiness is captured via the steep ramp
+                      multiplier shape (no AR(1) field exists on GenesisScenario).
+    """
+    name = name.lower()
+    if name == "ai_default":
+        return GenesisScenario(
+            name="genesis_ai_default",
+            share=share,
+            node_mix=((1, 0.70), (2, 0.12), (4, 0.08), (8, 0.05),
+                      (16, 0.03), (64, 0.015), (256, 0.005)),
+            walltime_mix=((168.0, 0.55), (96.0, 0.20), (48.0, 0.12),
+                          (24.0, 0.08), (6.0, 0.05)),
+            rt_ratio_mean=0.85,
+            rt_ratio_spread=0.12,
+            ramp_start_month=7,
+            ramp_full_month=10,
+        )
+    elif name == "incite_like":
+        # Capability jobs: large nodes, shorter walltimes, high rt_ratio.
+        return GenesisScenario(
+            name="genesis_incite_like",
+            share=share,
+            node_mix=((256, 0.30), (512, 0.30), (1024, 0.25), (2048, 0.15)),
+            walltime_mix=((6.0, 0.20), (12.0, 0.35), (18.0, 0.25), (24.0, 0.20)),
+            rt_ratio_mean=0.90,
+            rt_ratio_spread=0.08,
+            ramp_start_month=7,
+            ramp_full_month=10,
+        )
+    elif name == "bursty_campaign":
+        # Mid-to-large nodes with a rapid Jul->Aug surge (compressed ramp
+        # approximates bursty campaign behaviour; GenesisScenario has no
+        # explicit AR(1)/burst amplitude field so we encode burstiness via
+        # the steep seasonal multiplier shape).
+        return GenesisScenario(
+            name="genesis_bursty_campaign",
+            share=share,
+            node_mix=((64, 0.20), (128, 0.25), (256, 0.30), (512, 0.20),
+                      (1024, 0.05)),
+            walltime_mix=((6.0, 0.30), (12.0, 0.30), (24.0, 0.25),
+                          (48.0, 0.10), (96.0, 0.05)),
+            rt_ratio_mean=0.80,
+            rt_ratio_spread=0.15,
+            ramp_start_month=7,
+            ramp_full_month=8,   # fast surge: fully ramped by August
+        )
+    else:
+        raise ValueError(
+            f"Unknown genesis scenario {name!r}. "
+            f"Choose from: ai_default, incite_like, bursty_campaign")
+
+
+# ---------------------------------------------------------------------------
 # Convenience: build the full program set
 # ---------------------------------------------------------------------------
 

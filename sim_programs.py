@@ -476,15 +476,76 @@ def main():
     ap.add_argument("--csv", default=None)
     ap.add_argument("--plot", action="store_true")
     ap.add_argument("--outdir", default="results/programs_sim")
+    ap.add_argument(
+        "--genesis-from",
+        choices=["proportional", "all", "incite", "dd"],
+        default="proportional",
+        help=(
+            "Where Genesis's share comes from. "
+            "'proportional'/'all': take from INCITE/ALCC/DD in proportion to "
+            "their base shares so all four sum to 1.0. "
+            "'incite': Genesis share deducted entirely from INCITE. "
+            "'dd': Genesis share deducted entirely from DD."
+        ),
+    )
+    ap.add_argument(
+        "--genesis-scenario",
+        choices=["ai_default", "incite_like", "bursty_campaign"],
+        default="ai_default",
+        help=(
+            "Genesis job-mix scenario. "
+            "'ai_default': 1-node/7-day AI-heavy (default). "
+            "'incite_like': capability jobs (large nodes, 6-24h). "
+            "'bursty_campaign': mid-to-large nodes, fast Jul->Aug surge."
+        ),
+    )
     args = ap.parse_args()
 
     shares = args.shares if isinstance(args.shares, dict) else _parse_shares(args.shares)
+
+    # ------------------------------------------------------------------
+    # Share reallocation: apply --genesis-from policy so the four shares
+    # sum to 1.0 and the source of Genesis's budget is explicit.
+    # ------------------------------------------------------------------
+    genesis_share = shares[pp.GENESIS]
+    base_others = {p: shares[p] for p in (pp.INCITE, pp.ALCC, pp.DD)}
+    source = args.genesis_from
+
+    if source in ("proportional", "all"):
+        # Scale INCITE/ALCC/DD proportionally so I+A+D+G == 1.0.
+        others_sum = sum(base_others.values())
+        if others_sum > 0:
+            scale = (1.0 - genesis_share) / others_sum
+            for p in (pp.INCITE, pp.ALCC, pp.DD):
+                shares[p] = base_others[p] * scale
+        source_label = "proportional (INCITE/ALCC/DD scaled)"
+    elif source == "incite":
+        # Genesis share comes entirely from INCITE.
+        shares[pp.INCITE] = max(0.0, base_others[pp.INCITE] - genesis_share)
+        source_label = "incite"
+    elif source == "dd":
+        # Genesis share comes entirely from DD.
+        shares[pp.DD] = max(0.0, base_others[pp.DD] - genesis_share)
+        source_label = "dd"
+
+    total_share = sum(shares.values())
+    print(f"\n--- Share reallocation (--genesis-from {args.genesis_from}) ---")
+    for p in pp.ALL_PROGRAMS:
+        print(f"  {p:10s}: {shares[p]:.4f}")
+    print(f"  {'TOTAL':10s}: {total_share:.4f}")
+    print(f"  source: {source_label}")
+    print()
+
     duration_h = args.duration_days * 24.0
     rng = np.random.default_rng(args.seed)
 
     print(f"Machine: {args.total_nodes} nodes | policy={args.policy} | "
-          f"shares I/A/D/G = {[shares[p] for p in pp.ALL_PROGRAMS]}")
-    genesis = pp.GenesisScenario(share=shares[pp.GENESIS])
+          f"shares I/A/D/G = {[round(shares[p], 4) for p in pp.ALL_PROGRAMS]}")
+
+    # Build Genesis scenario from named profile + reallocated share.
+    genesis = pp.genesis_scenario(args.genesis_scenario, share=shares[pp.GENESIS])
+    print(f"Genesis scenario: {args.genesis_scenario} (\"{genesis.name}\")")
+
     profiles = pp.build_profiles(
         args.trace_db, shares=shares, genesis=genesis,
         machine_nodes=args.total_nodes,
@@ -507,11 +568,51 @@ def main():
     df = summarize_programs(jobs, sched, duration_h, args.total_nodes)
 
     if args.csv:
-        d = os.path.dirname(os.path.abspath(args.csv))
-        if d:
-            os.makedirs(d, exist_ok=True)
-        df.to_csv(args.csv, index=False)
-        print(f"\nDecision table CSV → {args.csv}")
+        import pathlib
+        csv_path = pathlib.Path(args.csv)
+        csv_path.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(csv_path, index=False)
+        print(f"\nDecision table CSV -> {csv_path}")
+
+        # ------------------------------------------------------------------
+        # Telemetry CSV: program node-hours over time (long format).
+        # Attribute: sched.program_nh_samples = [(t_h, {program: nh}), ...]
+        # Columns: t_h, program, delivered_nh
+        # ------------------------------------------------------------------
+        stem = csv_path.stem
+        # Remove _telemetry/_util suffixes if already present (idempotent)
+        for suffix in ("_telemetry", "_util"):
+            if stem.endswith(suffix):
+                stem = stem[: -len(suffix)]
+        tel_path = csv_path.parent / f"{stem}_telemetry.csv"
+        util_path = csv_path.parent / f"{stem}_util.csv"
+
+        samples = getattr(sched, "program_nh_samples", None)
+        if samples:
+            tel_rows = [
+                {"t_h": t, "program": prog, "delivered_nh": nh}
+                for t, prog_dict in samples
+                for prog, nh in prog_dict.items()
+            ]
+            pd.DataFrame(tel_rows).to_csv(tel_path, index=False)
+            print(f"Telemetry CSV      -> {tel_path}")
+        else:
+            print(f"WARNING: sched.program_nh_samples is empty or absent; "
+                  f"skipping {tel_path}")
+
+        # ------------------------------------------------------------------
+        # Utilization CSV: (t, busy_nodes) samples.
+        # Attribute: sched.utilization_samples = [(t_h, busy_nodes), ...]
+        # Columns: t, busy
+        # ------------------------------------------------------------------
+        util_samples = getattr(sched, "utilization_samples", None)
+        if util_samples:
+            pd.DataFrame(util_samples, columns=["t", "busy"]).to_csv(
+                util_path, index=False)
+            print(f"Utilization CSV    -> {util_path}")
+        else:
+            print(f"WARNING: sched.utilization_samples is empty or absent; "
+                  f"skipping {util_path}")
 
 
 if __name__ == "__main__":
