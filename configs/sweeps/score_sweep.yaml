@@ -1,0 +1,12 @@
+# Score-function sweep: how does the priority formula trade off the three
+# objectives (system utilization, allocation utilization, queued-time)?
+# Short 30-day window, no capacity chokepoint, budget policy on.
+base: configs/validate_baseline_30d.yaml
+name: score_sweep
+grid:
+  scheduler.score_expr:
+    - "base + aging_rate*wait"                                  # FIFO + aging (baseline)
+    - "base + aging_rate*wait - 0.002*nodes"                    # favor small jobs
+    - "base + aging_rate*wait + 0.001*nodes"                    # favor big jobs
+    - "base + aging_rate*wait + 30*(target_share-delivered_share)"  # pull to allocation targets
+    - "(base + aging_rate*wait)*budget_damp"                    # budget-damped

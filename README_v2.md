@@ -122,5 +122,55 @@ consistent with the historical demand-bound ~66%.
 
 A sweep is a set of YAML files (or one base + overrides) differing in one field
 — e.g. `capacity_protection.pool_nodes ∈ {256, 512, 1024, 2048}` or a set of
-`score_expr` strings — each run tagged by `config_hash`. A higher-level
-distributed launcher is future work; for now, loop `run.py` over configs.
+`score_expr` strings — each run tagged by `config_hash`.
+
+Use `sweep.py` with a small grid file:
+
+```bash
+python sweep.py --grid configs/sweeps/score_sweep.yaml
+python sweep.py --grid configs/sweeps/score_sweep.yaml --seeds 3   # multi-seed
+```
+
+Grid file format (each key is a dotted path into the config; values are the list
+to sweep; runs = cartesian product):
+
+```yaml
+base: configs/validate_baseline_30d.yaml
+name: score_sweep
+grid:
+  scheduler.score_expr:
+    - "base + aging_rate*wait"
+    - "base + aging_rate*wait + 30*(target_share-delivered_share)"
+  capacity_protection.pool_nodes: [512, 1024, 2048]
+```
+
+Output: `results/<name>/sweep_results.csv` with the three objectives per run
+(`avg_util_pct`, `alloc_util`, `wait_p50_h/p95_h`) plus per-program delivered
+share and a printed leaderboard. Oversubscribed configs are caught by the
+pre-flight guard and recorded as `status=SATURATED` without killing the sweep.
+
+### What the model CAN and CANNOT optimize (read before sweeping)
+
+The `size_tiers` (queue menu) serve two roles, with very different fidelity:
+
+- **`walltime_cap_h` IS a real lever** — it truncates job walltimes in the
+  generator, changing the workload and scheduling. Optimize freely.
+- **Per-tier `base_priority` / `aging_rate` and the `score_expr` ARE real
+  levers** — they re-rank a fixed workload, which is exactly what the model
+  does. Optimize freely.
+- **`capacity_protection` IS a real lever** — pluggable strategy for the
+  small-vs-big-job tradeoff. Optimize freely.
+- **Node `min_nodes` / `max_nodes` boundaries are NOT a demand lever.** The
+  generator bootstraps real historical job rows, so moving a node boundary only
+  *relabels* the same jobs into different tiers — it does **not** change how many
+  big/small jobs users submit. A real queue-menu change induces user behavioral
+  response (resize, resubmit, migrate) that this model does not represent.
+  Optimizing a node-boundary menu against the current model answers "what if we
+  re-scored the same jobs," not "what if users adapted to a new menu." Treat
+  node-boundary conclusions as invalid until a behavioral-response layer exists.
+
+**Load regime matters.** At ≥1.0× offered load the machine is demand-bound and
+utilization pins near its ceiling regardless of score — the score function then
+only changes *who waits*, not *how full* the machine is. Score/protection
+optimization for utilization only bites at the load regimes the pre-flight
+NOTE flags. Sweep across load scales, not just policies.
