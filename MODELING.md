@@ -466,3 +466,104 @@ gc = GenesisConfig(enabled=True, scenario="ai_default", share=0.15)
 nodes, wt, rt = build_genesis_arrays(gc, np.random.default_rng(0))
 genesis_rate_h(gc, 10624, nodes, wt, rt) * 24   # jobs/day
 ```
+
+---
+
+## 9. Queue-menu redesign (Stage 2): one rule + a draining reservation
+
+### The problem
+
+Aurora's queue menu grew by accretion: a `large` queue (24h cap, MTBF-driven),
+a `small` queue, and — added recently to serve the emerging AI community after
+`tiny` was retired — a `capacity` queue granting **small (1–few node) jobs up to
+7 days**. The result is two legitimate long-walltime populations at opposite ends
+of the size spectrum (AI small-node/7-day, and INCITE full-machine capability),
+plus a hard constraint: **full-machine jobs must stay ≤24h** because at ~10k
+nodes a week-long run would almost certainly hit a node failure.
+
+The fear: a carpet of small 7-day jobs perpetually occupies the machine so a
+10k-node job can never assemble its allocation — **large-job starvation.**
+
+### Production nodes (the accountability denominator)
+
+`machine.production_nodes` (Aurora: **9,600**) is the DOE-negotiated node count
+used as the denominator for utilization and the capacity-job threshold, separate
+from physical `total_nodes` (10,624, some always down). A **capacity job = ≥20%
+of production = ≥1,920 nodes**. Utilization in all Stage-2 metrics is measured
+against production nodes.
+
+### The menu as ONE rule: `max_walltime(nodes)`
+
+`walltime_policy` replaces the small/medium/large queue menu with a single
+configurable rule — a `(min_nodes, max_walltime_h)` step function. It can encode
+any size→walltime relationship; the study uses monotonic-decreasing (small get
+7 days for AI, full-machine capped at 24h for MTBF):
+
+```yaml
+walltime_policy:
+  enabled: true
+  breakpoints: [[1, 168], [512, 48], [1920, 24]]   # 1-node:7d, 512:48h, >=1920:24h
+```
+
+This is trivially explainable on a slide: *"your max walltime depends only on
+your node count."*
+
+### The lever that actually protects large jobs: a draining EASY reservation
+
+The key finding: **the walltime menu is NOT what protects large jobs — the
+scheduler's reservation discipline is.** The original scheduler had a
+starvation bug: the reservation for a blocked large job was recomputed every
+pass and never *held*, so freed nodes were handed to newly-arrived small jobs and
+the large job's allocation never accumulated. Verified: in a stress test of
+small 7-day jobs + five 9,600-node jobs, only **1 of 5** large jobs ever started.
+
+The fix is a **draining reservation**: once the top blocked job can't fit, its
+nodes are *held* — greedy starts may only use nodes not reserved for it, and only
+backfill jobs that finish before the reservation runs. Freed nodes then
+accumulate toward the large job instead of being given away. After the fix:
+**5 of 5** large jobs start (waits 42–59h in the torture test), small jobs still
+flow. The reserved job also starts the instant enough nodes are free, so the
+machine doesn't idle waiting on a stale estimate.
+
+### Headline result
+
+Sweeping the small-job walltime cap from 24h → 7 days at a stable operating
+point (0.6× historical load, 9,600 production nodes, draining reservation on):
+
+![Stage-2 tradeoff](docs/figures/stage2_small_walltime_vs_bigwait.png)
+
+| Small-job cap | Large-job (≥1920) p95 wait | Large jobs starved | Small-job p95 wait | Utilization |
+|---------------|---------------------------:|-------------------:|-------------------:|------------:|
+| 24h           | 11.3 h                     | 0                  | 27.3 h             | 77.2 %      |
+| 48h (2 d)     | 11.3 h                     | 0                  | 27.6 h             | 77.3 %      |
+| 96h (4 d)     | 11.0 h                     | 0                  | 27.6 h             | 78.2 %      |
+| **168h (7 d)**| **11.0 h**                 | **0**              | **27.6 h**         | **79.5 %**  |
+
+**Conclusion for the committee:** with a draining EASY reservation protecting
+large jobs, small jobs can be granted the full **7-day** walltime at **~zero
+cost** to large-job wait (flat ~11h, zero starvation) and small-job wait barely
+moves (27.3→27.6h); utilization even rises slightly (long small jobs backfill
+well). The AI community and INCITE capability jobs are **decoupled** — you do
+not have to choose between them. The lever to get right is the **reservation
+discipline**, not restricting small-job walltime.
+
+### Honest caveats
+
+- **Load regime:** this holds at ≤~0.65× historical load. With 7-day small jobs,
+  the queue becomes unstable above that (7-day jobs + node-draining for large
+  jobs can't clear faster than arrivals) — itself a finding: 7-day small jobs
+  constrain the sustainable load. Utilization there is production-node-based ~77%.
+- **Behavioral response:** this run keeps historical job sizes (`behavior.enabled:
+  false`). A `BehaviorConfig` size-choice model exists (jobs may resize to chase
+  a walltime incentive) for testing menus where the size↔walltime coupling would
+  change user behavior; it is off here because the monotonic-decreasing menu does
+  not incentivize resizing.
+- **MTBF not modeled:** the 24h large-job cap is imposed as policy, not derived
+  from a simulated failure rate (deferred by decision).
+
+### Reproduce
+
+```bash
+python sweep.py --grid configs/sweeps/stage2_small_walltime_sweep.yaml
+python scripts/make_stage2_figure.py   # -> docs/figures/stage2_small_walltime_vs_bigwait.png
+```

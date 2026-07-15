@@ -59,9 +59,15 @@ class Scheduler:
         self.total_nodes = cfg.machine.total_nodes
         self.free_nodes = self.total_nodes
         self.enable_backfill = cfg.scheduler.enable_backfill
+        # Draining reservation engages only for jobs at/above this size (default:
+        # the capacity-job threshold = 20% of production nodes). Below it, blocked
+        # jobs simply wait (no node-holding), which keeps the machine filling
+        # under load. Configurable via scheduler.reserve_min_nodes (0 => default).
+        rmn = getattr(cfg.scheduler, "reserve_min_nodes", 0)
+        self._reserve_min_nodes = rmn if rmn and rmn > 0 else int(round(0.20 * cfg.machine.prod()))
         self.now_h = 0.0
         self.pending: list[Job] = []
-        self.running: list[Job] = []
+        self.running: set = set()
         self.events: list[_Event] = []
         self._seq = 0
 
@@ -254,6 +260,8 @@ class Scheduler:
         if not self.pending:
             return
         if self.free_nodes < self._min_pending_nodes():
+            # Even the smallest job can't start. But a draining reservation may
+            # still need to hold nodes — nothing to start though, so return.
             return
         prog_cache: dict = {}
         proj_cache: dict = {}
@@ -264,25 +272,47 @@ class Scheduler:
 
         reservation_time: Optional[float] = None
         reserved_idx: Optional[int] = None
+        reserved_nodes: int = 0
         removed: set = set()
 
+        # EASY pass with a DRAINING reservation that engages ONLY for genuinely
+        # large jobs (>= self._reserve_min_nodes, default = capacity threshold =
+        # 20% of production nodes). Rationale: holding nodes for every blocked
+        # job drains the machine and explodes the queue under oversubscription;
+        # small/medium blocked jobs should just wait (they'll fit soon as nodes
+        # free). Only true capability jobs need the protective drain that stops a
+        # carpet of small long jobs from perpetually starving them.
         for idx in order:
             j = self.pending[idx]
-            if self._can_start(j):
-                self._start(j, idx, removed)
-            elif reserved_idx is None and not self._over_ceiling(j):
-                reserved_idx = idx
-                reservation_time = self._estimate_reservation(j)
-
-        if reservation_time is not None and self.enable_backfill:
-            for idx in order:
-                if idx in removed or idx == reserved_idx:
-                    continue
-                j = self.pending[idx]
-                if not self._can_start(j):
-                    continue
-                if self.now_h + j.walltime_h <= reservation_time + 1e-9:
+            if reserved_idx is None:
+                if self._can_start(j):
                     self._start(j, idx, removed)
+                elif (j.nodes >= self._reserve_min_nodes
+                      and not self._over_ceiling(j)):
+                    # a large job that can't start -> hold a draining reservation
+                    reserved_idx = idx
+                    reserved_nodes = j.nodes
+                    reservation_time = self._estimate_reservation(j)
+                # else: small/medium blocked job -> skip, keep filling greedily
+            else:
+                # reservation is held: only backfill jobs that (a) fit in the
+                # nodes NOT reserved, and (b) finish before the reservation time.
+                if not self.enable_backfill:
+                    continue
+                if reservation_time is None:
+                    continue
+                usable = self.free_nodes - reserved_nodes
+                if (j.nodes <= usable and self._can_start(j)
+                        and self.now_h + j.walltime_h <= reservation_time + 1e-9):
+                    self._start(j, idx, removed)
+
+        # The reserved job may now be startable (nodes drained/freed within this
+        # pass or already sufficient). Start it immediately if so — otherwise a
+        # big job would idle a mostly-empty machine waiting for a stale estimate.
+        if reserved_idx is not None and reserved_idx not in removed:
+            rj = self.pending[reserved_idx]
+            if self._can_start(rj):
+                self._start(rj, reserved_idx, removed)
 
         if removed:
             self.pending = [j for i, j in enumerate(self.pending)
@@ -291,7 +321,7 @@ class Scheduler:
 
     def _start(self, job: Job, idx: int, removed: set):
         removed.add(idx)
-        self.running.append(job)
+        self.running.add(job)
         self.free_nodes -= job.nodes
         if self._is_protected(job):
             self._protected_nodes_in_use += job.nodes
@@ -305,7 +335,7 @@ class Scheduler:
 
     def _finish(self, job: Job):
         if job in self.running:
-            self.running.remove(job)
+            self.running.discard(job)
             self.free_nodes += job.nodes
             if self._is_protected(job):
                 self._protected_nodes_in_use = max(

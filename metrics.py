@@ -79,21 +79,43 @@ def summary_stats(jobs: list[Job], sched: Scheduler, cfg: SimConfig) -> dict:
     started = [j for j in jobs if j.start_time_h is not None]
     util = pd.DataFrame(sched.util_samples, columns=["t", "busy"])
     util = util[util["t"] <= duration_h]
-    avg_util = float((util["busy"] / sched.total_nodes).mean()) if len(util) else 0.0
+    prod = cfg.machine.prod()
+    avg_util = float((util["busy"] / prod).mean()) if len(util) else 0.0
     completed = [j for j in started
                  if j.end_time_h is not None and j.end_time_h <= duration_h]
     nh = sum(j.nodes * _win_rt(j, duration_h) for j in started)
     all_waits = np.array([j.start_time_h - j.submit_time_h for j in started]) \
         if started else np.array([0.0])
+
+    # Large-job (capability) vs small-job wait — the starvation metric.
+    # "Large" = >= the capacity-job threshold (20% of production nodes).
+    big_thresh = int(round(0.20 * prod))
+    big = [j for j in started if j.nodes >= big_thresh]
+    small = [j for j in started if j.nodes < big_thresh]
+    big_all = [j for j in jobs if j.nodes >= big_thresh]
+    big_waits = (np.array([j.start_time_h - j.submit_time_h for j in big])
+                 if big else np.array([0.0]))
+    small_waits = (np.array([j.start_time_h - j.submit_time_h for j in small])
+                   if small else np.array([0.0]))
+
     return {
         "n_jobs": len(jobs),
         "n_started": len(started),
         "n_unstarted": len(jobs) - len(started),
         "n_completed": len(completed),
-        "avg_util_pct": round(avg_util * 100, 2),
+        "avg_util_pct": round(avg_util * 100, 2),   # vs PRODUCTION nodes
         "node_hours_delivered": round(nh),
         "throughput_jobs_per_day": round(len(completed) / cfg.run.duration_days, 1),
         "wait_p50_h": round(float(np.percentile(all_waits, 50)), 2),
         "wait_p95_h": round(float(np.percentile(all_waits, 95)), 2),
         "wait_max_h": round(float(all_waits.max()), 2),
+        # starvation metric: capability jobs (>= 20% of production nodes)
+        "big_thresh_nodes": big_thresh,
+        "n_big_jobs": len(big_all),
+        "n_big_unstarted": len(big_all) - len(big),
+        "big_wait_p50_h": round(float(np.percentile(big_waits, 50)), 2),
+        "big_wait_p95_h": round(float(np.percentile(big_waits, 95)), 2),
+        "big_wait_max_h": round(float(big_waits.max()), 2),
+        "small_wait_p50_h": round(float(np.percentile(small_waits, 50)), 2),
+        "small_wait_p95_h": round(float(np.percentile(small_waits, 95)), 2),
     }

@@ -25,7 +25,15 @@ import yaml
 
 @dataclass(frozen=True)
 class MachineConfig:
-    total_nodes: int = 10_624              # Aurora nominal
+    total_nodes: int = 10_624              # physical node count (Aurora nominal)
+    # Production nodes: the DOE-negotiated accountability denominator. Some
+    # physical nodes are always down/out-of-service, so utilization and the
+    # capacity-job threshold are measured against production_nodes, not
+    # total_nodes. Aurora: 9600. Defaults to total_nodes when unset (<=0).
+    production_nodes: int = 9_600
+
+    def prod(self) -> int:
+        return self.production_nodes if self.production_nodes and self.production_nodes > 0 else self.total_nodes
 
 
 @dataclass(frozen=True)
@@ -51,6 +59,65 @@ class ProgramConfig:
 
 
 @dataclass(frozen=True)
+class WalltimePolicyConfig:
+    """Queue-menu-as-a-rule: max walltime allowed as a function of node count.
+
+    This REPLACES per-tier walltime caps when enabled, collapsing the
+    small/medium/large queue menu into ONE rule that is trivially explainable:
+    'a job of N nodes may request up to max_walltime(N) hours'.
+
+    `breakpoints` is a list of (min_nodes, max_walltime_h) pairs, sorted by
+    min_nodes. For a job of N nodes, the cap is the max_walltime_h of the
+    highest breakpoint whose min_nodes <= N. This can encode ANY monotonic (up
+    or down) or non-monotonic size->walltime relationship — the direction is a
+    policy choice, not baked in.
+
+    Example (big-unlocks-long): [[1,6],[512,12],[1920,168]]
+    Example (small-gets-long):  [[1,168],[512,48],[1920,24]]
+    """
+    enabled: bool = False
+    breakpoints: tuple = ()   # tuple of (min_nodes:int, max_walltime_h:float)
+
+    def cap_for(self, nodes: int, fallback_cap_h: float) -> float:
+        if not self.enabled or not self.breakpoints:
+            return fallback_cap_h
+        cap = fallback_cap_h
+        for min_n, wt in sorted(self.breakpoints, key=lambda b: b[0]):
+            if nodes >= min_n:
+                cap = wt
+        return cap
+
+
+@dataclass(frozen=True)
+class BehaviorConfig:
+    """Behavioral size-choice model.
+
+    Historical jobs chose their node count under the OLD queue menu. To honestly
+    test a NEW walltime_policy, a fraction of jobs must be allowed to RE-CHOOSE
+    their size in response to the new walltime incentive: a user who wants a long
+    run, under a policy where long walltime requires >= K nodes, may bring K
+    nodes to unlock it (and vice-versa). Without this the sim only re-scores the
+    old job mix and cannot show the behavioral equilibrium.
+
+    Model (deliberately simple + bounded, so it is explainable and sweepable):
+      - With probability `adapt_fraction`, a job is 'walltime-motivated': it has
+        a desired walltime (its originally-sampled walltime). If the new policy
+        would cap it below that desire, the job's owner resizes UP to the
+        smallest node count whose max_walltime(nodes) >= desired walltime
+        (bounded by max_resize_nodes), trading size for the runtime they want.
+      - `program_adapt` optionally overrides adapt_fraction per program (e.g.
+        INCITE users are more walltime-motivated than DD).
+      - resize is capped so a 1-node job can't jump to 10k nodes unrealistically.
+    When disabled, jobs keep their historical sizes (walltime just gets capped).
+    """
+    enabled: bool = False
+    adapt_fraction: float = 0.3            # fraction of jobs that resize to chase walltime
+    program_adapt: tuple = ()              # tuple of (program, fraction) overrides
+    max_resize_nodes: int = 1920           # ceiling on behavioral resize
+    min_desired_walltime_h: float = 24.0   # only jobs wanting >= this bother resizing
+
+
+@dataclass(frozen=True)
 class GeneratorConfig:
     """Joint conditional Monte Carlo generator settings."""
     # Conditioning dimensions for the joint sampler. Jobs are bootstrapped from
@@ -66,6 +133,10 @@ class GeneratorConfig:
     # intrinsic, not a calendar coincidence).
     burn_curve_key: str = "alloc_month_offset"
     seed: int = 42
+    # Scales ALL arrival rates uniformly. 1.0 = historical volume; <1 lightens
+    # load (study policy at non-saturated demand), >1 stresses it. Lets you
+    # sweep the demand-bound -> policy-bound transition.
+    load_multiplier: float = 1.0
 
 
 @dataclass(frozen=True)
@@ -146,6 +217,10 @@ class SchedulerConfig:
     # Budget-damped priority knobs (used by budget_damp variable).
     budget_damp_strength: float = 8.0
     policy: str = "budget"                 # blind | budget
+    # Draining reservation engages only for jobs >= this node count (protects
+    # large capability jobs from small-job starvation). 0 = default to the
+    # capacity-job threshold (20% of production nodes).
+    reserve_min_nodes: int = 0
 
 
 @dataclass(frozen=True)
@@ -194,6 +269,8 @@ class SimConfig:
     genesis: GenesisConfig = field(default_factory=GenesisConfig)
     projects: ProjectsConfig = field(default_factory=ProjectsConfig)
     deadlines: DeadlinesConfig = field(default_factory=DeadlinesConfig)
+    walltime_policy: WalltimePolicyConfig = field(default_factory=WalltimePolicyConfig)
+    behavior: BehaviorConfig = field(default_factory=BehaviorConfig)
     capacity_protection: CapacityProtectionConfig = field(default_factory=CapacityProtectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     run: RunConfig = field(default_factory=RunConfig)
@@ -233,6 +310,16 @@ class SimConfig:
             if "deadlines" in dd:
                 dd["deadlines"] = tuple(Deadline(**x) for x in dd["deadlines"])
             kw["deadlines"] = DeadlinesConfig(**dd)
+        if "walltime_policy" in d:
+            wp = dict(d["walltime_policy"])
+            if "breakpoints" in wp:
+                wp["breakpoints"] = tuple(tuple(b) for b in wp["breakpoints"])
+            kw["walltime_policy"] = WalltimePolicyConfig(**wp)
+        if "behavior" in d:
+            bh = dict(d["behavior"])
+            if "program_adapt" in bh:
+                bh["program_adapt"] = tuple(tuple(x) for x in bh["program_adapt"])
+            kw["behavior"] = BehaviorConfig(**bh)
         if "capacity_protection" in d:
             kw["capacity_protection"] = CapacityProtectionConfig(**d["capacity_protection"])
         if "scheduler" in d:

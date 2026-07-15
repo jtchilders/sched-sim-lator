@@ -1,0 +1,19 @@
+# HEADLINE Stage-2 sweep: how long can small jobs run before large (>=1920-node)
+# jobs start getting starved?
+#
+# Varies the small-job walltime cap (first breakpoint) from 24h -> 7 days, holding
+# the full-machine cap at 24h. The draining EASY reservation protects large jobs;
+# this sweep finds the safe ceiling: the largest small-job walltime where
+# big_wait_p95_h stays acceptable.
+#
+# Read the output leaderboard columns: big_wait_p95 (must stay low) vs
+# small_wait_p95 vs avg_util. The answer for the slide is "small jobs can run up
+# to X days before 10k-node jobs wait more than Y hours".
+base: configs/stage2_base.yaml
+name: stage2_small_walltime_sweep
+grid:
+  walltime_policy.breakpoints:
+    - [[1, 24],  [512, 24], [1920, 24]]    # baseline: everyone 24h
+    - [[1, 48],  [512, 48], [1920, 24]]    # small up to 48h
+    - [[1, 96],  [512, 48], [1920, 24]]    # small up to 96h
+    - [[1, 168], [512, 48], [1920, 24]]    # small up to 7 days (the AI ask)

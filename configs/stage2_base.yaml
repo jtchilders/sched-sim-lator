@@ -1,0 +1,45 @@
+# Stage-2 base: single-queue collapsed menu on Aurora production nodes.
+# One rule replaces small/medium/large queues:
+#   max_walltime(nodes): small jobs get long runs (AI), large jobs capped 24h (MTBF).
+# Large-job starvation is prevented by the draining EASY reservation in the
+# scheduler (not by the walltime menu). This base is the reference config the
+# small-walltime sweep varies.
+trace_db: /Users/jchilders/pbs_monitor_aurora.db
+
+machine:
+  total_nodes: 10624          # physical
+  production_nodes: 9600      # DOE-negotiated accountability denominator; capacity job = 20% = 1920
+
+programs:
+  - {name: INCITE, target_share: 0.50, overburn: 0.25, alloc_year_start_month: 1}
+  - {name: ALCC,   target_share: 0.25, overburn: 0.0,  alloc_year_start_month: 7}
+  - {name: DD,     target_share: 0.10, overburn: 0.0,  soft_floor: true, alloc_year_start_month: 1}
+
+# Single-queue menu-as-a-rule. Monotonic-decreasing: small unlocks 7 days (AI),
+# mid tapers, full-machine capped at 24h (MTBF). The 512/1920 breakpoints are the
+# knobs; the small (1-node) cap is what the headline sweep varies.
+walltime_policy:
+  enabled: true
+  breakpoints:
+    - [1, 168]      # 1+ nodes: up to 7 days  (AI small long jobs)
+    - [512, 48]     # 512+ nodes: up to 48h
+    - [1920, 24]    # >=1920 (capacity/large): 24h  (MTBF ceiling)
+
+behavior:
+  enabled: false    # size-choice model available but off for the starvation study
+
+generator:
+  load_multiplier: 0.6        # stable operating point for 7-day small jobs (see MODELING)
+
+genesis: {enabled: false}
+projects: {enabled: false}
+deadlines: {enabled: false}
+capacity_protection: {strategy: none}   # protection is now the draining reservation, not a pool cap
+
+scheduler:
+  enable_backfill: true       # EASY backfill + draining reservation protects large jobs
+  policy: blind
+  score_expr: "base + aging_rate*wait"
+
+run: {duration_days: 20, start_month: 1, sample_dt_h: 6.0, n_seeds: 1, base_seed: 42}
+output: {outdir: results/stage2_base, saturation_abort_pending: 400000}

@@ -121,8 +121,12 @@ def run_grid(grid_path: str, seeds_override: int | None):
             rec = {"config_hash": chash, **label, "status": "OK",
                    "runtime_s": round(time.time() - t0, 1)}
             for m in ("avg_util_pct", "alloc_util", "wait_p50_h", "wait_p95_h",
-                      "wait_max_h", "n_started", "n_jobs", "throughput_jobs_per_day"):
-                rec[m] = float(np.mean([ps[m] for ps in per_seed]))
+                      "wait_max_h", "n_started", "n_jobs", "throughput_jobs_per_day",
+                      "big_wait_p50_h", "big_wait_p95_h", "big_wait_max_h",
+                      "n_big_jobs", "n_big_unstarted",
+                      "small_wait_p50_h", "small_wait_p95_h"):
+                if m in per_seed[0]:
+                    rec[m] = float(np.mean([ps[m] for ps in per_seed]))
             # per-program delivered share (mean across seeds)
             dt_all = pd.concat([ps["_dt"] for ps in per_seed], ignore_index=True)
             for prog, g in dt_all.groupby("program"):
@@ -150,6 +154,12 @@ def run_grid(grid_path: str, seeds_override: int | None):
         print("\n=== Lowest p95 queued-time ===")
         print(ok.nsmallest(5, "wait_p95_h")[
             [*keys, "wait_p95_h", "avg_util_pct", "alloc_util"]].to_string(index=False))
+        # Starvation view: large-job wait vs small-job wait (Stage-2 headline).
+        if "big_wait_p95_h" in ok.columns:
+            print("\n=== Large-job (capability) vs small-job wait — starvation check ===")
+            cols = [*keys, "big_wait_p95_h", "n_big_unstarted",
+                    "small_wait_p95_h", "avg_util_pct"]
+            print(ok[cols].to_string(index=False))
     return res
 
 

@@ -66,9 +66,14 @@ def _parse_walltime_vec(s: "pd.Series") -> "pd.Series":
     return h + m / 60.0 + sec / 3600.0
 
 
-@dataclass
+@dataclass(eq=False)
 class Job:
-    """A generated job. Program-tagged; size_tier assigned from node count."""
+    """A generated job. Program-tagged; size_tier assigned from node count.
+
+    eq=False -> identity equality/hash, so `job in list` and list.remove(job)
+    use `is` (O(1) compare) instead of field-by-field dataclass __eq__, which
+    was a scheduler hot-path cost. Jobs are unique objects; identity is correct.
+    """
     job_id: int
     program: str
     size_tier: str
@@ -241,6 +246,7 @@ def build_project_samplers(df: pd.DataFrame, cfg: SimConfig) -> dict:
     span_h = (df["submit_time"].max() - df["submit_time"].min()).total_seconds() / 3600.0
     over = cfg.projects.over_allocation
     min_jobs = cfg.projects.min_project_jobs
+    load = cfg.generator.load_multiplier
     prog_names = {p.name for p in cfg.programs}
 
     out: dict[str, list[ProjectSampler]] = {p: [] for p in prog_names}
@@ -256,7 +262,7 @@ def build_project_samplers(df: pd.DataFrame, cfg: SimConfig) -> dict:
         proj_col = sub["project"].where(sub["project"].isin(big), f"{prog}_misc")
         for proj, g in sub.assign(_p=proj_col).groupby("_p"):
             rows = g[["nodes", "walltime_h", "rt_ratio"]].to_numpy()
-            rate_h = len(g) / span_h if span_h > 0 else 1.0
+            rate_h = (len(g) / span_h if span_h > 0 else 1.0) * load
             delivered = float(g["nh"].sum())
             award = delivered * over
             out[prog].append(ProjectSampler(
@@ -318,7 +324,7 @@ class JobGenerator:
             self.samplers[p.name] = ConditionalSampler(
                 df, p, cfg.generator.min_cell_rows)
             n = int((df["program"] == p.name).sum())
-            self.rates_h[p.name] = n / span_h if span_h > 0 else 1.0
+            self.rates_h[p.name] = (n / span_h if span_h > 0 else 1.0) * cfg.generator.load_multiplier
             self.burn[p.name] = fit_burn_curve(df, p)
             self.start_month[p.name] = p.alloc_year_start_month
 
@@ -326,6 +332,70 @@ class JobGenerator:
         self.projects_by_prog: dict = {}
         if cfg.projects.enabled:
             self.projects_by_prog = build_project_samplers(df, cfg)
+
+        # Stage-2: walltime policy + behavioral size-choice
+        self._wp = cfg.walltime_policy
+        self._bh = cfg.behavior
+        self._adapt_by_prog = {p: cfg.behavior.adapt_fraction for p in
+                               [pc.name for pc in cfg.programs] + ["Genesis"]}
+        for prog, frac in cfg.behavior.program_adapt:
+            self._adapt_by_prog[prog] = frac
+
+    def _finalize(self, program, nodes, wt, runtime, rng):
+        """Apply the (optional) behavioral size-choice + walltime policy, then
+        return (nodes, size_tier, walltime_h, runtime_h) ready for a Job.
+
+        Order:
+          1. Determine the desired walltime = the originally-sampled wt.
+          2. If behavior enabled and this job adapts and desires a long run that
+             the policy would cap: resize UP to the smallest node count whose
+             policy cap >= desired wt (bounded by max_resize_nodes).
+          3. Apply the walltime policy (or tier fallback cap) at the final size.
+          4. Clamp runtime <= final walltime (scale runtime proportionally so a
+             capped job doesn't keep an impossible runtime).
+        """
+        desired_wt = wt
+        # (2) behavioral resize to chase walltime
+        if (self._bh.enabled and self._wp.enabled
+                and desired_wt >= self._bh.min_desired_walltime_h
+                and rng.random() < self._adapt_by_prog.get(program, self._bh.adapt_fraction)):
+            tier0 = self.cfg.tier_for_nodes(nodes)
+            cap_now = self._wp.cap_for(nodes, tier0.walltime_cap_h)
+            if cap_now < desired_wt:
+                new_nodes = self._smallest_nodes_for_walltime(desired_wt, nodes)
+                if new_nodes is not None and new_nodes != nodes:
+                    # resize: scale runtime fraction with the new (larger) wt cap,
+                    # keep the runtime/walltime ratio the user originally had
+                    ratio = runtime / wt if wt > 0 else 1.0
+                    nodes = new_nodes
+                    wt = desired_wt
+                    runtime = ratio * wt
+        # (3) apply walltime cap at final size
+        tier = self.cfg.tier_for_nodes(nodes)
+        cap = self._wp.cap_for(nodes, tier.walltime_cap_h)
+        if wt > cap:
+            ratio = runtime / wt if wt > 0 else 1.0
+            wt = cap
+            runtime = ratio * wt
+        runtime = min(runtime, wt)
+        return nodes, tier, wt, runtime
+
+    def _smallest_nodes_for_walltime(self, desired_wt, cur_nodes):
+        """Smallest node count (>= cur_nodes, <= max_resize_nodes) whose walltime
+        policy cap >= desired_wt. None if the policy never allows desired_wt in
+        that range (job can't get its wish; stays put)."""
+        if not self._wp.enabled or not self._wp.breakpoints:
+            return None
+        cap_ceiling = self._bh.max_resize_nodes
+        # breakpoints sorted; find the first min_nodes whose cap >= desired_wt
+        best = None
+        for min_n, cap_wt in sorted(self._wp.breakpoints, key=lambda b: b[0]):
+            if cap_wt >= desired_wt and min_n <= cap_ceiling:
+                best = int(min_n) if best is None else min(best, int(min_n))
+        # must be at least cur_nodes (resize UP only) and within ceiling
+        if best is None:
+            return None
+        return max(best, cur_nodes) if max(best, cur_nodes) <= cap_ceiling else None
 
     def _cal_month_at(self, t_h: float, sim_start_month: int) -> int:
         day = int(t_h // 24)
@@ -357,9 +427,7 @@ class JobGenerator:
                     if t >= duration_h:
                         break
                     nodes, wt, runtime = self.samplers[p.name].sample_row(alloc_off, rng)
-                    tier = self.cfg.tier_for_nodes(nodes)
-                    wt = min(wt, tier.walltime_cap_h)
-                    runtime = min(runtime, wt)
+                    nodes, tier, wt, runtime = self._finalize(p.name, nodes, wt, runtime, rng)
                     jobs.append(Job(
                         job_id=0, program=p.name, size_tier=tier.name,
                         nodes=nodes, walltime_h=wt, actual_runtime_h=runtime,
@@ -413,9 +481,7 @@ class JobGenerator:
                     if t >= duration_h:
                         break
                     nodes, wt, runtime = ps.sample_row(rng)
-                    tier = self.cfg.tier_for_nodes(nodes)
-                    wt = min(wt, tier.walltime_cap_h)
-                    runtime = min(runtime, wt)
+                    nodes, tier, wt, runtime = self._finalize(prog, nodes, wt, runtime, rng)
                     jobs.append(Job(
                         job_id=0, program=prog, size_tier=tier.name,
                         nodes=nodes, walltime_h=wt, actual_runtime_h=runtime,
@@ -446,9 +512,8 @@ class JobGenerator:
                 break
             i = rng.integers(len(nodes_arr))
             nodes = int(nodes_arr[i]); wt = float(wt_arr[i])
-            tier = cfg.tier_for_nodes(nodes)
-            wt = min(wt, tier.walltime_cap_h)
             runtime = float(np.clip(rt_arr[i] * wt, 0.05, wt))
+            nodes, tier, wt, runtime = self._finalize("Genesis", nodes, wt, runtime, rng)
             jobs.append(Job(
                 job_id=0, program="Genesis", size_tier=tier.name,
                 nodes=nodes, walltime_h=wt, actual_runtime_h=runtime,
