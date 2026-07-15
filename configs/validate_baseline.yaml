@@ -1,0 +1,46 @@
+# Baseline validation config.
+# Purpose: confirm the joint generator + scheduler reproduce the OBSERVED
+# delivered-share split (~57/30/13 INCITE/DD/ALCC) when we impose NO extra
+# policy and NO capacity protection. If this holds, the generator is credible.
+#
+# - Genesis OFF (validate against pure historical programs).
+# - capacity_protection: none (do not throttle small jobs).
+# - scheduler policy: blind (program-agnostic; pure size-tier scoring + aging).
+# - full year, single seed for a fast first check.
+
+trace_db: /Users/jchilders/pbs_monitor_aurora.db
+
+machine:
+  total_nodes: 10624
+
+programs:
+  - {name: INCITE, target_share: 0.50, overburn: 0.25, alloc_year_start_month: 1}
+  - {name: ALCC,   target_share: 0.25, overburn: 0.0,  alloc_year_start_month: 7}
+  - {name: DD,     target_share: 0.10, overburn: 0.0,  soft_floor: true, alloc_year_start_month: 1}
+
+generator:
+  min_cell_rows: 20
+  min_runtime_s: 30
+  seed: 42
+
+genesis:
+  enabled: false
+
+capacity_protection:
+  strategy: none
+
+scheduler:
+  enable_backfill: true
+  policy: blind
+  score_expr: "base + aging_rate * wait"
+
+run:
+  duration_days: 365
+  start_month: 1
+  sample_dt_h: 6.0
+  n_seeds: 1
+  base_seed: 42
+
+output:
+  outdir: results/validate_baseline
+  saturation_abort_pending: 200000
