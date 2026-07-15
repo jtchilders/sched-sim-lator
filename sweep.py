@@ -106,8 +106,11 @@ def run_grid(grid_path: str, seeds_override: int | None):
             per_seed = []
             for seed in seeds:
                 rng = np.random.default_rng(seed)
-                jobs = JobGenerator(cfg, df).generate(rng)
+                gen = JobGenerator(cfg, df)
+                jobs = gen.generate(rng)
                 sched = Scheduler(cfg)
+                if cfg.projects.enabled:
+                    sched.attach_projects(gen.projects_by_prog)
                 sched.run(jobs)
                 s = M.summary_stats(jobs, sched, cfg)
                 dt = M.decision_table(jobs, sched, cfg)

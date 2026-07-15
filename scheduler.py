@@ -32,6 +32,7 @@ SCORE_VARS = {
     "aging_rate",      # size-tier aging rate
     "budget_ratio",    # delivered / pro-rated budget for the program
     "budget_damp",     # smooth damping factor in (0,1]
+    "project_damp",    # per-project damping in (0,1] (1.0 if project layer off)
     "delivered_share", # program's delivered share so far
     "target_share",    # program's target share
     "now",             # sim time (h)
@@ -98,6 +99,13 @@ class Scheduler:
         self.policy = cfg.scheduler.policy
         self.damp_strength = cfg.scheduler.budget_damp_strength
         self._score_fn = compile_expr(cfg.scheduler.score_expr, SCORE_VARS)
+
+        # --- optional project layer: per-project awards + delivered accounting ---
+        self.projects_enabled = cfg.projects.enabled
+        self.project_award_nh: dict = {}
+        self.project_delivered_nh: dict = {}
+        self.project_damp_strength = cfg.projects.project_damp_strength
+        # populated by attach_projects() before run (needs the generator's awards)
 
         # --- telemetry ---
         self.util_samples: list[tuple[float, int]] = []
@@ -168,7 +176,7 @@ class Scheduler:
 
     # -- scoring --------------------------------------------------------
 
-    def _score(self, job: Job, prog_cache: dict) -> float:
+    def _score(self, job: Job, prog_cache: dict, proj_cache: dict) -> float:
         """Score one job. Per-program values (budget_ratio, budget_damp,
         delivered_share, target_share) are computed ONCE per program per pass
         and cached; only per-job fields vary. The score expression is compiled
@@ -194,9 +202,39 @@ class Scheduler:
             "nodes": job.nodes,
             "walltime": job.walltime_h,
             "aging_rate": job.aging_rate,
+            "project_damp": self._project_damp(job, proj_cache),
             **pc,
         }
         return float(self._score_fn(ns))
+
+    def _project_damp(self, job: Job, proj_cache: dict) -> float:
+        """Per-project damping in (0,1]: 1.0 while under the project's pro-rated
+        award, decaying as delivered exceeds it. 1.0 when the project layer is
+        off or the project has no award. Cached per project per pass."""
+        if not self.projects_enabled or self.project_damp_strength <= 0:
+            return 1.0
+        proj = job.project
+        cached = proj_cache.get(proj)
+        if cached is not None:
+            return cached
+        award = self.project_award_nh.get(proj)
+        if not award or award <= 0:
+            proj_cache[proj] = 1.0
+            return 1.0
+        frac = min(1.0, self.now_h / self.year_h) if self.year_h > 0 else 1.0
+        prorated = award * frac
+        ratio = self.project_delivered_nh.get(proj, 0.0) / prorated if prorated > 0 else 0.0
+        d = 1.0 if ratio <= 1.0 else math.exp(-self.project_damp_strength * (ratio - 1.0))
+        proj_cache[proj] = d
+        return d
+
+    def attach_projects(self, projects_by_prog: dict) -> None:
+        """Register per-project awards (from the generator's ProjectSamplers)
+        so the scheduler can do per-project budget accounting + damping."""
+        for lst in projects_by_prog.values():
+            for ps in lst:
+                self.project_award_nh[ps.project] = ps.award_nh
+                self.project_delivered_nh[ps.project] = 0.0
 
     def _delivered_share(self, prog: str) -> float:
         tot = sum(self.delivered_nh.values()) or 1.0
@@ -218,7 +256,8 @@ class Scheduler:
         if self.free_nodes < self._min_pending_nodes():
             return
         prog_cache: dict = {}
-        keyed = [(-self._score(j, prog_cache), j.submit_time_h, i)
+        proj_cache: dict = {}
+        keyed = [(-self._score(j, prog_cache, proj_cache), j.submit_time_h, i)
                  for i, j in enumerate(self.pending)]
         keyed.sort()
         order = [k[2] for k in keyed]
@@ -260,6 +299,8 @@ class Scheduler:
         job.end_time_h = self.now_h + job.actual_runtime_h
         if job.program in self.delivered_nh:
             self.delivered_nh[job.program] += job.nodes * job.actual_runtime_h
+        if self.projects_enabled and job.project in self.project_delivered_nh:
+            self.project_delivered_nh[job.project] += job.nodes * job.actual_runtime_h
         self._push(job.end_time_h, "finish", job)
 
     def _finish(self, job: Job):

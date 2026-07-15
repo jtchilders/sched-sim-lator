@@ -27,6 +27,8 @@ def run_one(cfg: SimConfig, df, seed: int):
     gen = JobGenerator(cfg, df)
     jobs = gen.generate(rng)
     sched = Scheduler(cfg)
+    if cfg.projects.enabled:
+        sched.attach_projects(gen.projects_by_prog)
     sched.run(jobs)
     return jobs, sched
 

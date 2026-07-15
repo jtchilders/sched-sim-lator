@@ -69,6 +69,50 @@ class GeneratorConfig:
 
 
 @dataclass(frozen=True)
+class ProjectsConfig:
+    """Project-level allocation layer.
+
+    ALCF awards hours per PROJECT (via competitive review), not per program.
+    Programs deliberately OVER-allocate (award more than their fraction) because
+    most projects UNDER-use their award. This layer partitions each program's
+    historical jobs by the real `project` column and gives each project a
+    notional award; per-project budget damping then makes over-allocation safe
+    (idle projects' headroom flows to active ones).
+
+    When disabled, allocation is modeled at the program level only (v2 behavior).
+    """
+    enabled: bool = False
+    # Over-allocation factor: a program awards this multiple of its target share
+    # across its projects (e.g. 1.15 = award 115% of the fraction, expecting
+    # ~87% utilization). > 1.0 reproduces the deliberate over-subscription.
+    over_allocation: float = 1.15
+    # Per-project budget damping: priority damps as a project nears its award.
+    # 0 = no per-project steering (projects only limited by program ceiling).
+    project_damp_strength: float = 6.0
+    # Projects with fewer than this many historical jobs are folded into a
+    # program-wide "misc" pseudo-project (avoids thousands of 1-job projects).
+    min_project_jobs: int = 20
+
+
+@dataclass(frozen=True)
+class Deadline:
+    """A conference/paper deadline that drives a bounded submission spike."""
+    name: str
+    month: int                     # calendar month of the deadline (1-12)
+    day: int = 15                  # day of month
+    lead_days: int = 21            # spike window length before the deadline
+    rate_multiplier: float = 2.0   # arrival-rate multiplier in the window
+    affected_fraction: float = 0.4 # fraction of projects that chase this deadline
+
+
+@dataclass(frozen=True)
+class DeadlinesConfig:
+    """2-3 conference deadlines sprinkled through the year."""
+    enabled: bool = False
+    deadlines: tuple = ()
+
+
+@dataclass(frozen=True)
 class GenesisConfig:
     """Genesis has no history => synthesized from explicit assumptions."""
     enabled: bool = True
@@ -148,6 +192,8 @@ class SimConfig:
     programs: tuple = DEFAULT_PROGRAMS
     generator: GeneratorConfig = field(default_factory=GeneratorConfig)
     genesis: GenesisConfig = field(default_factory=GenesisConfig)
+    projects: ProjectsConfig = field(default_factory=ProjectsConfig)
+    deadlines: DeadlinesConfig = field(default_factory=DeadlinesConfig)
     capacity_protection: CapacityProtectionConfig = field(default_factory=CapacityProtectionConfig)
     scheduler: SchedulerConfig = field(default_factory=SchedulerConfig)
     run: RunConfig = field(default_factory=RunConfig)
@@ -180,6 +226,13 @@ class SimConfig:
             kw["generator"] = GeneratorConfig(**g)
         if "genesis" in d:
             kw["genesis"] = GenesisConfig(**d["genesis"])
+        if "projects" in d:
+            kw["projects"] = ProjectsConfig(**d["projects"])
+        if "deadlines" in d:
+            dd = dict(d["deadlines"])
+            if "deadlines" in dd:
+                dd["deadlines"] = tuple(Deadline(**x) for x in dd["deadlines"])
+            kw["deadlines"] = DeadlinesConfig(**dd)
         if "capacity_protection" in d:
             kw["capacity_protection"] = CapacityProtectionConfig(**d["capacity_protection"])
         if "scheduler" in d:

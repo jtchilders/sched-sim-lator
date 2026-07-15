@@ -78,6 +78,7 @@ class Job:
     submit_time_h: float
     base_priority: float
     aging_rate: float
+    project: str = ""              # project id (project layer); "" if disabled
     start_time_h: Optional[float] = None
     end_time_h: Optional[float] = None
 
@@ -97,7 +98,7 @@ def load_trace(cfg: SimConfig) -> pd.DataFrame:
             SELECT submit_time, nodes, walltime,
                    actual_runtime_seconds AS runtime_s,
                    queue_time_seconds AS qtime_s,
-                   allocation_type
+                   allocation_type, project
             FROM jobs
             WHERE state='FINISHED' AND nodes IS NOT NULL AND nodes>0
               AND actual_runtime_seconds IS NOT NULL
@@ -202,6 +203,102 @@ def fit_burn_curve(df: pd.DataFrame, prog_cfg: ProgramConfig) -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
+# Project layer (optional): per-project pools + awards + arrival rates
+# ---------------------------------------------------------------------------
+
+class ProjectSampler:
+    """Holds one project's real job rows for joint bootstrap + its award/rate."""
+
+    def __init__(self, project: str, program: str, rows: np.ndarray,
+                 arrival_rate_h: float, delivered_nh: float,
+                 award_nh: float):
+        self.project = project
+        self.program = program
+        self._rows = rows                     # (nodes, walltime_h, rt_ratio)
+        self.arrival_rate_h = arrival_rate_h  # annual-avg jobs/h for this project
+        self.delivered_nh = delivered_nh      # historical delivered node-h
+        self.award_nh = award_nh              # notional award (over-allocated)
+
+    def sample_row(self, rng: np.random.Generator) -> tuple:
+        idx = rng.integers(len(self._rows))
+        nodes, wt, ratio = self._rows[idx]
+        runtime = float(np.clip(ratio * wt, 0.05, wt))
+        return int(nodes), float(wt), runtime
+
+
+def build_project_samplers(df: pd.DataFrame, cfg: SimConfig) -> dict:
+    """Partition each program's jobs into per-project ProjectSamplers.
+
+    Award model: a project's notional award = its historical delivered node-h
+    scaled by the program's over_allocation factor. Because jobs are
+    bootstrapped from the project's REAL delivered mix, simulated delivery lands
+    near the historical (under-used) level — the target-vs-delivered gap and the
+    over-allocation both fall out of the data rather than being imposed.
+
+    Small projects (< min_project_jobs) are folded into a program-wide
+    '<PROG>_misc' pseudo-project so we don't carry thousands of 1-job projects.
+    """
+    span_h = (df["submit_time"].max() - df["submit_time"].min()).total_seconds() / 3600.0
+    over = cfg.projects.over_allocation
+    min_jobs = cfg.projects.min_project_jobs
+    prog_names = {p.name for p in cfg.programs}
+
+    out: dict[str, list[ProjectSampler]] = {p: [] for p in prog_names}
+    df = df.copy()
+    df["nh"] = df["nodes"] * df["runtime_h"]
+    for prog in prog_names:
+        sub = df[df["program"] == prog]
+        if len(sub) == 0:
+            continue
+        counts = sub.groupby("project").size()
+        big = set(counts[counts >= min_jobs].index)
+        # assign a synthetic project id for small ones
+        proj_col = sub["project"].where(sub["project"].isin(big), f"{prog}_misc")
+        for proj, g in sub.assign(_p=proj_col).groupby("_p"):
+            rows = g[["nodes", "walltime_h", "rt_ratio"]].to_numpy()
+            rate_h = len(g) / span_h if span_h > 0 else 1.0
+            delivered = float(g["nh"].sum())
+            award = delivered * over
+            out[prog].append(ProjectSampler(
+                project=str(proj), program=prog, rows=rows,
+                arrival_rate_h=rate_h, delivered_nh=delivered, award_nh=award))
+    return out
+
+
+def build_deadline_windows(cfg: SimConfig, projects_by_prog: dict,
+                           rng: np.random.Generator) -> list:
+    """Return [(start_h, end_h, rate_multiplier, set_of_affected_projects)].
+
+    Deadlines are calendar-month based; we map them into sim-time using
+    run.start_month and 30-day months (consistent with _cal_month_at).
+    A configurable fraction of projects 'chase' each deadline.
+    """
+    if not cfg.deadlines.enabled:
+        return []
+    all_projects = [ps.project for lst in projects_by_prog.values() for ps in lst]
+    windows = []
+    sim_start = cfg.run.start_month
+    duration_h = cfg.run.duration_days * 24.0
+    for dl in cfg.deadlines.deadlines:
+        # month offset from sim start (0..) -> approx day -> hour
+        month_off = (dl.month - sim_start) % 12
+        deadline_day = month_off * 30 + (dl.day - 1)
+        end_h = deadline_day * 24.0
+        start_h = end_h - dl.lead_days * 24.0
+        # also add the next-year occurrence if the run is long enough
+        for shift in range(0, int(cfg.run.duration_days // 365) + 1):
+            s = start_h + shift * 365 * 24.0
+            e = end_h + shift * 365 * 24.0
+            if e < 0 or s > duration_h:
+                continue
+            k = max(1, int(round(dl.affected_fraction * len(all_projects))))
+            affected = set(rng.choice(all_projects, size=min(k, len(all_projects)),
+                                      replace=False)) if all_projects else set()
+            windows.append((max(0.0, s), e, dl.rate_multiplier, affected))
+    return windows
+
+
+# ---------------------------------------------------------------------------
 # Generator
 # ---------------------------------------------------------------------------
 
@@ -225,6 +322,11 @@ class JobGenerator:
             self.burn[p.name] = fit_burn_curve(df, p)
             self.start_month[p.name] = p.alloc_year_start_month
 
+        # Optional project layer
+        self.projects_by_prog: dict = {}
+        if cfg.projects.enabled:
+            self.projects_by_prog = build_project_samplers(df, cfg)
+
     def _cal_month_at(self, t_h: float, sim_start_month: int) -> int:
         day = int(t_h // 24)
         month_offset = day // 30
@@ -236,38 +338,89 @@ class JobGenerator:
         sim_start = cfg.run.start_month
         jobs: list[Job] = []
 
-        for p in cfg.programs:
-            base_rate = self.rates_h[p.name]
-            burn = self.burn[p.name]
-            smonth = self.start_month[p.name]
-            t = 0.0
-            while t < duration_h:
-                cal_month = self._cal_month_at(t, sim_start)
-                alloc_off = _alloc_month_offset(cal_month, smonth)
-                rate = base_rate * float(burn[alloc_off])
-                if rate <= 0:
-                    t += 24.0
-                    continue
-                t += rng.exponential(1.0 / rate)
-                if t >= duration_h:
-                    break
-                nodes, wt, runtime = self.samplers[p.name].sample_row(alloc_off, rng)
-                tier = self.cfg.tier_for_nodes(nodes)
-                wt = min(wt, tier.walltime_cap_h)
-                runtime = min(runtime, wt)
-                jobs.append(Job(
-                    job_id=0, program=p.name, size_tier=tier.name,
-                    nodes=nodes, walltime_h=wt, actual_runtime_h=runtime,
-                    submit_time_h=t,
-                    base_priority=tier.base_priority, aging_rate=tier.aging_rate))
+        if cfg.projects.enabled:
+            jobs += self._generate_by_project(rng)
+        else:
+            for p in cfg.programs:
+                base_rate = self.rates_h[p.name]
+                burn = self.burn[p.name]
+                smonth = self.start_month[p.name]
+                t = 0.0
+                while t < duration_h:
+                    cal_month = self._cal_month_at(t, sim_start)
+                    alloc_off = _alloc_month_offset(cal_month, smonth)
+                    rate = base_rate * float(burn[alloc_off])
+                    if rate <= 0:
+                        t += 24.0
+                        continue
+                    t += rng.exponential(1.0 / rate)
+                    if t >= duration_h:
+                        break
+                    nodes, wt, runtime = self.samplers[p.name].sample_row(alloc_off, rng)
+                    tier = self.cfg.tier_for_nodes(nodes)
+                    wt = min(wt, tier.walltime_cap_h)
+                    runtime = min(runtime, wt)
+                    jobs.append(Job(
+                        job_id=0, program=p.name, size_tier=tier.name,
+                        nodes=nodes, walltime_h=wt, actual_runtime_h=runtime,
+                        submit_time_h=t,
+                        base_priority=tier.base_priority, aging_rate=tier.aging_rate))
 
-        # Genesis (synthetic)
+        # Genesis (synthetic) — program-level regardless of project layer
         if cfg.genesis.enabled:
             jobs += self._generate_genesis(rng)
 
         jobs.sort(key=lambda j: j.submit_time_h)
         for i, j in enumerate(jobs):
             j.job_id = i
+        return jobs
+
+    def _generate_by_project(self, rng: np.random.Generator) -> list[Job]:
+        """Per-project arrivals. Each project uses its own arrival rate, its
+        program's seasonal burn curve, and any conference-deadline spike that
+        applies to it in the current time window."""
+        cfg = self.cfg
+        duration_h = cfg.run.duration_days * 24.0
+        sim_start = cfg.run.start_month
+        burn_by_prog = {p.name: self.burn[p.name] for p in cfg.programs}
+        smonth_by_prog = {p.name: p.alloc_year_start_month for p in cfg.programs}
+        windows = build_deadline_windows(cfg, self.projects_by_prog, rng)
+        jobs: list[Job] = []
+
+        def deadline_mult(project: str, t: float) -> float:
+            m = 1.0
+            for (s, e, mult, affected) in windows:
+                if s <= t <= e and project in affected:
+                    m *= mult
+            return m
+
+        for prog, samplers in self.projects_by_prog.items():
+            burn = burn_by_prog[prog]
+            smonth = smonth_by_prog[prog]
+            for ps in samplers:
+                if ps.arrival_rate_h <= 0:
+                    continue
+                t = 0.0
+                while t < duration_h:
+                    cal_month = self._cal_month_at(t, sim_start)
+                    alloc_off = _alloc_month_offset(cal_month, smonth)
+                    rate = ps.arrival_rate_h * float(burn[alloc_off]) \
+                        * deadline_mult(ps.project, t)
+                    if rate <= 0:
+                        t += 24.0
+                        continue
+                    t += rng.exponential(1.0 / rate)
+                    if t >= duration_h:
+                        break
+                    nodes, wt, runtime = ps.sample_row(rng)
+                    tier = self.cfg.tier_for_nodes(nodes)
+                    wt = min(wt, tier.walltime_cap_h)
+                    runtime = min(runtime, wt)
+                    jobs.append(Job(
+                        job_id=0, program=prog, size_tier=tier.name,
+                        nodes=nodes, walltime_h=wt, actual_runtime_h=runtime,
+                        submit_time_h=t, project=ps.project,
+                        base_priority=tier.base_priority, aging_rate=tier.aging_rate))
         return jobs
 
     def _generate_genesis(self, rng: np.random.Generator) -> list[Job]:

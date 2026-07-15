@@ -146,6 +146,68 @@ def fig_genesis(cfg_nodes=10624):
     _save(fig, "genesis_scenarios.png")
 
 
+def fig_projects(cfg_path="configs/validate_projects.yaml"):
+    """Project layer: per-project under-use + deadline submission spikes.
+    Runs a short project-enabled sim to visualize the emergent behavior."""
+    import dataclasses as dc
+    from generator import JobGenerator
+    from scheduler import Scheduler
+    cfg = SimConfig.from_yaml(cfg_path)
+    df = load_trace(cfg)
+    g = JobGenerator(cfg, df)
+    rng = np.random.default_rng(42)
+    jobs = g.generate(rng)
+
+    fig, ax = plt.subplots(1, 2, figsize=(14, 4.4))
+
+    # (a) per-project delivered-node-hours share within each program (award tail)
+    import pandas as pd
+    for prog, samplers in g.projects_by_prog.items():
+        shares = np.sort([ps.delivered_nh for ps in samplers])[::-1]
+        if shares.sum() == 0:
+            continue
+        shares = shares / shares.sum()
+        ax[0].plot(np.arange(1, len(shares) + 1), np.cumsum(shares),
+                   marker=".", label=f"{prog} ({len(shares)} proj)",
+                   color=COL.get(prog, "gray"))
+    ax[0].set_xlabel("project rank (largest first)")
+    ax[0].set_ylabel("cumulative share of program node-hours")
+    ax[0].set_title("Award concentration: few projects dominate each program")
+    ax[0].legend(fontsize=8); ax[0].grid(alpha=.3)
+
+    # (b) deadline effect as in-window vs baseline submission rate (bar chart).
+    # A detrended time series hides the spike (a rolling baseline absorbs a
+    # multi-week window), so we show the measured ratio directly: mean daily
+    # submissions INSIDE each deadline window vs the non-window baseline.
+    days = np.array([int(j.submit_time_h // 24) for j in jobs])
+    counts = np.bincount(days, minlength=int(cfg.run.duration_days)).astype(float)
+    sim_start = cfg.run.start_month
+    win_days = np.zeros(len(counts), bool)
+    dl_info = []
+    for dl in cfg.deadlines.deadlines:
+        d = ((dl.month - sim_start) % 12) * 30 + (dl.day - 1)
+        lo, hi = max(0, d - dl.lead_days), min(len(counts) - 1, d)
+        dl_info.append((dl.name, lo, hi))
+        win_days[lo:hi + 1] = True
+    baseline = counts[~win_days].mean() if (~win_days).any() else counts.mean()
+    names = [n for (n, _, _) in dl_info]
+    ratios = [counts[lo:hi + 1].mean() / baseline for (_, lo, hi) in dl_info]
+    bars = ax[1].bar(names, ratios, color="#c0392b", alpha=.8)
+    ax[1].axhline(1.0, color="k", ls=":", label="non-deadline baseline")
+    for b, r in zip(bars, ratios):
+        ax[1].text(b.get_x() + b.get_width() / 2, r + 0.02, f"{r:.2f}x",
+                   ha="center", fontsize=9)
+    ax[1].set_ylabel("in-window submissions / baseline")
+    ax[1].set_title("Conference-deadline effect (mean submission rate in lead window)")
+    ax[1].set_ylim(0, max(ratios) * 1.25); ax[1].legend(fontsize=8)
+    ax[1].grid(alpha=.3, axis="y")
+
+    fig.suptitle("Project layer: competitive-award concentration + deadline-driven "
+                 "submission bursts (project-enabled config)", fontsize=12)
+    fig.tight_layout()
+    _save(fig, "project_layer.png")
+
+
 def _save(fig, name):
     path = os.path.join(OUT, name)
     fig.savefig(path, dpi=110, bbox_inches="tight")
@@ -162,6 +224,7 @@ def main():
     fig_size_tier_mix(df)
     fig_burn_curves(df)
     fig_genesis(cfg.machine.total_nodes)
+    fig_projects()
     print("Done.")
 
 

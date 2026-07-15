@@ -1,0 +1,33 @@
+# Stage-1 validation: project layer + over-allocation + conference deadlines.
+# Should still reproduce real delivered shares AND show realistic per-project
+# under-use (delivered < award for most projects).
+trace_db: /Users/jchilders/pbs_monitor_aurora.db
+machine: {total_nodes: 10624}
+
+programs:
+  - {name: INCITE, target_share: 0.50, overburn: 0.25, alloc_year_start_month: 1}
+  - {name: ALCC,   target_share: 0.25, overburn: 0.0,  alloc_year_start_month: 7}
+  - {name: DD,     target_share: 0.10, overburn: 0.0,  soft_floor: true, alloc_year_start_month: 1}
+
+projects:
+  enabled: true
+  over_allocation: 1.15          # award 115% of fraction; projects under-use
+  project_damp_strength: 6.0     # a project's priority damps as it nears its award
+  min_project_jobs: 20           # small projects folded into <PROG>_misc
+
+deadlines:
+  enabled: true
+  deadlines:
+    - {name: SC,          month: 4,  day: 1,  lead_days: 28, rate_multiplier: 2.0, affected_fraction: 0.35}
+    - {name: Supercomp2,  month: 8,  day: 15, lead_days: 21, rate_multiplier: 1.8, affected_fraction: 0.30}
+    - {name: NeurIPS,     month: 5,  day: 20, lead_days: 21, rate_multiplier: 2.2, affected_fraction: 0.25}
+
+genesis: {enabled: false}
+capacity_protection: {strategy: none}
+
+scheduler:
+  policy: blind
+  score_expr: "base + aging_rate*wait"
+
+run: {duration_days: 365, start_month: 1, sample_dt_h: 6.0, n_seeds: 1, base_seed: 42}
+output: {outdir: results/validate_projects, saturation_abort_pending: 300000}

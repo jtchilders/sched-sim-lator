@@ -256,17 +256,82 @@ Code: `scheduler.Scheduler._damp_factor`, `_over_ceiling`,
 
 ---
 
-## 6. Why project is not (yet) a dimension
+## 6. Project layer — competitive awards, over-allocation, under-use
 
-The DB has a `project` column, and per-project allocation size + burn behavior
-is real structure. It is deliberately **excluded for now** (Taylor's call):
-program is the dominant axis because the three programs have *different
-allocation calendars* that drive different utilization timelines (ALCC slow,
-INCITE fast, DD scattered), and that is the first-order effect. The conditioning
-schema (`generator.condition_on`) is designed so `project` can be added as a
-dimension — or promoted to a first-class entity with its own budget — without a
-rewrite. This is noted as future work, not a limitation of the current
-question.
+ALCF awards hours **per project** via competitive proposal review (except DD,
+where most small requests are granted but rarely fully used), not per program.
+Each program awards up to its designated fraction — deliberately **over-awarding**
+because most projects **under-use** their allocation. The simulator models this
+with an optional project layer (`projects.enabled: true`).
+
+### How it works
+
+- Each program's historical jobs are **partitioned by the real `project`
+  column** (362 distinct projects; INCITE 59, ALCC 51, DD 256). Projects with
+  fewer than `min_project_jobs` are folded into a `<PROG>_misc` pseudo-project.
+- Each project gets a **notional award** = its historical delivered node-hours ×
+  `over_allocation` (default 1.15 → programs award 115 % of the fraction).
+- Jobs are generated **per project**: each project has its own arrival rate
+  (∝ its historical job volume), draws whole rows from its own real job pool
+  (joint bootstrap, same as §1), and follows its program's seasonal burn curve.
+- The scheduler tracks **delivered node-hours per project** and applies a
+  **per-project damping** (`project_damp_strength`): a project's priority damps
+  as it nears its pro-rated award, so heavy burners yield and idle projects'
+  headroom flows to active ones. This is what makes over-allocation safe.
+
+### Why over-allocation + under-use matters (and what falls out)
+
+Because jobs are bootstrapped from each project's *real* delivered mix, the
+simulated delivery lands near the historical (under-used) level — so the
+target-vs-delivered gap and the under-use are **emergent from data**, not
+imposed. A full-year project-enabled run (`configs/validate_projects.yaml`):
+
+| Program | Delivered (project layer) | Delivered (program-only) | Real |
+|---------|--------------------------:|-------------------------:|-----:|
+| INCITE  | 52.9 %                    | 49.6 %                   | 57.0 % |
+| DD      | 32.8 %                    | 35.6 %                   | 29.8 % |
+| ALCC    | 14.4 %                    | 14.8 %                   | 13.2 % |
+
+The project layer **improves INCITE fidelity** (closer to the real 57 %).
+Per-project utilization (delivered ÷ award) across 283 projects:
+**p10 = 0.58, p50 = 0.92, p90 = 1.33** — and **66 % of projects deliver under
+100 % of their award**, exactly the "most projects don't fully use their
+allocation" behavior, reproduced rather than assumed.
+
+### Conference deadlines (submission bursts)
+
+`deadlines.enabled: true` adds 2–3 configurable conference deadlines. Each has a
+calendar date, a `lead_days` window, a `rate_multiplier`, and an
+`affected_fraction` of projects that "chase" it (drawn once per run). In the
+lead window, affected projects' arrival rates are multiplied. Measured effect
+(in-window vs non-window submission rate): **SC 1.7×, NeurIPS 1.4×,
+Supercomp2 1.15×** — bounded spikes matching `rate_multiplier × affected_fraction`,
+not system-breaking surges.
+
+![Project layer](docs/figures/project_layer.png)
+
+*Left: award concentration — a few projects dominate each program's node-hours
+(matches the real competitive-award tail). Right: the measured deadline effect,
+mean submission rate in each deadline's lead window relative to the non-deadline
+baseline.*
+
+### Config
+
+```yaml
+projects:
+  enabled: true
+  over_allocation: 1.15         # award 115% of fraction (deliberate over-award)
+  project_damp_strength: 6.0    # per-project priority damping near award
+  min_project_jobs: 20          # fold tiny projects into <PROG>_misc
+deadlines:
+  enabled: true
+  deadlines:
+    - {name: SC, month: 4, day: 1, lead_days: 28, rate_multiplier: 2.0, affected_fraction: 0.35}
+    - {name: NeurIPS, month: 5, day: 20, lead_days: 21, rate_multiplier: 2.2, affected_fraction: 0.25}
+```
+
+When `projects.enabled: false`, allocation is modeled at the program level only
+(the earlier behavior), and `project_damp` = 1.0 in the score function.
 
 ---
 
