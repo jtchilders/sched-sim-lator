@@ -17,3 +17,8 @@ venv/
 results/**/*.png
 results/**/*.csv
 slides.html
+
+# EXCEPTION: modeling figures embedded in MODELING.md ARE tracked (docs/figures/).
+# These are small, reproducible via scripts/make_modeling_figures.py, and needed
+# to render the modeling documentation on GitHub.
+!docs/figures/*.png
