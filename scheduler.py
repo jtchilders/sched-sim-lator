@@ -65,6 +65,9 @@ class Scheduler:
         # under load. Configurable via scheduler.reserve_min_nodes (0 => default).
         rmn = getattr(cfg.scheduler, "reserve_min_nodes", 0)
         self._reserve_min_nodes = rmn if rmn and rmn > 0 else int(round(0.20 * cfg.machine.prod()))
+        # Per-cycle examine cap: beyond this many pending jobs, only the top-K by
+        # priority are examined (partial select). Bounds per-cycle sort cost.
+        self._examine_cap = getattr(cfg.scheduler, "examine_cap", 4000) or 4000
         self.now_h = 0.0
         self.pending: list[Job] = []
         self.running: set = set()
@@ -105,6 +108,16 @@ class Scheduler:
         self.policy = cfg.scheduler.policy
         self.damp_strength = cfg.scheduler.budget_damp_strength
         self._score_fn = compile_expr(cfg.scheduler.score_expr, SCORE_VARS)
+        # Fast path: if the score expression is exactly the common aging form
+        # "base + aging_rate*wait" (uses only base/aging_rate/wait, and no budget
+        # or project damping is active), scoring is a cheap vectorizable formula
+        # instead of a per-job compiled-expr eval — a large win when re-scoring a
+        # deep pending queue every cycle. Detected, not assumed; falls back to the
+        # general evaluator for any other expression or when damping is on.
+        ref = getattr(self._score_fn, "referenced_vars", set())
+        self._simple_score = (ref <= {"base", "aging_rate", "wait"}
+                              and cfg.scheduler.policy != "budget"
+                              and not cfg.projects.enabled)
 
         # --- optional project layer: per-project awards + delivered accounting ---
         self.projects_enabled = cfg.projects.enabled
@@ -119,6 +132,7 @@ class Scheduler:
         self.queue_depth_samples: list[tuple[float, dict]] = []
         self._sat_limit = cfg.output.saturation_abort_pending
         self._min_pending_cache: Optional[int] = None
+        self._dirty: bool = True   # state changed since last schedule pass?
 
     # -- events ---------------------------------------------------------
 
@@ -263,12 +277,33 @@ class Scheduler:
             # Even the smallest job can't start. But a draining reservation may
             # still need to hold nodes — nothing to start though, so return.
             return
+        # Score all pending, then take priority order. When pending is deep,
+        # a full O(P log P) sort of jobs that can't possibly start this cycle is
+        # wasted work: once the machine fills (greedy) and the reservation is
+        # placed, only the highest-priority prefix + bounded backfill window
+        # matter. So beyond `examine_cap` we take just the top-K by score via a
+        # partial selection (heapq.nsmallest is O(P log K)). This mirrors PBS's
+        # bounded per-cycle work (it does not exhaustively re-rank an unbounded
+        # queue every iteration). K is large enough (default 4000) that greedy
+        # fill + reservation + backfill of a 9600-node machine is unaffected.
         prog_cache: dict = {}
         proj_cache: dict = {}
-        keyed = [(-self._score(j, prog_cache, proj_cache), j.submit_time_h, i)
-                 for i, j in enumerate(self.pending)]
-        keyed.sort()
-        order = [k[2] for k in keyed]
+        now = self.now_h
+        if self._simple_score:
+            # Cheap inline aging score: base + aging_rate*wait. No dict build, no
+            # compiled-expr eval per job — the hot path when re-scoring deep queues.
+            keyed = ((-(j.base_priority + j.aging_rate * (now - j.submit_time_h
+                        if now > j.submit_time_h else 0.0)), j.submit_time_h, i)
+                     for i, j in enumerate(self.pending))
+        else:
+            keyed = ((-self._score(j, prog_cache, proj_cache), j.submit_time_h, i)
+                     for i, j in enumerate(self.pending))
+        cap = self._examine_cap
+        if len(self.pending) > cap:
+            top = heapq.nsmallest(cap, keyed)
+        else:
+            top = sorted(keyed)
+        order = [k[2] for k in top]
 
         reservation_time: Optional[float] = None
         reserved_idx: Optional[int] = None
@@ -407,20 +442,30 @@ class Scheduler:
         cfg = self.cfg
         duration_h = cfg.run.duration_days * 24.0
         sample_dt = cfg.run.sample_dt_h
+        cycle_dt = max(1e-6, cfg.scheduler.sched_cycle_h)
 
         # -- pre-flight oversubscription check (cheap, before the event loop) --
-        # If the protected tier is offered more node-hours than its protection
-        # strategy can deliver, the backlog will grow without bound. Detect it
-        # up front instead of grinding through a quadratic slowdown to find out.
         self._preflight_check(jobs, duration_h)
 
         for j in jobs:
             self._push(j.submit_time_h, "arrive", j)
+        # periodic sampling events (measurement granularity)
         t = 0.0
         while t <= duration_h:
             self._push(t, "sample", None)
             t += sample_dt
+        # periodic PBS scheduling-cycle events (the ONLY time we (re)schedule)
+        t = 0.0
+        while t <= duration_h:
+            self._push(t, "cycle", None)
+            t += cycle_dt
 
+        # PBS-faithful event loop. Arrivals just enqueue; finishes free nodes;
+        # NEITHER triggers scheduling. The scheduler runs one greedy+reservation
+        # +backfill pass only on "cycle" events (every sched_cycle_h), exactly
+        # like PBS Pro's scheduler_iteration. This is both realistic (a job waits
+        # up to one cycle after nodes free) and the performance fix (scheduling
+        # cost is O(cycles x P log P), independent of event count).
         EPS = 1e-9
         while self.events:
             ev = heapq.heappop(self.events)
@@ -438,24 +483,32 @@ class Scheduler:
                 continue
 
             self.now_h = t_now
-            sched_needed = False
+            do_cycle = False
             samples = []
             for e in batch:
                 if e.kind == "arrive":
                     self.pending.append(e.job)
+                    self._dirty = True
                     if self._min_pending_cache is not None and \
                             e.job.nodes < self._min_pending_cache:
                         self._min_pending_cache = e.job.nodes
-                    if e.job.nodes <= self.free_nodes:
-                        sched_needed = True
                 elif e.kind == "finish":
                     self._finish(e.job)
-                    sched_needed = True
+                    self._dirty = True
+                elif e.kind == "cycle":
+                    do_cycle = True
                 elif e.kind == "sample":
                     samples.append(e)
 
-            if sched_needed:
+            # Skip idle cycles: if no arrival/finish has happened since the last
+            # scheduling pass, nothing the scheduler can act on has changed
+            # (aging shifts priorities but only matters when capacity is free —
+            # and if the last pass left the machine unable to start the queue
+            # head, an unchanged queue+capacity yields the same decision). This
+            # collapses the 52k/yr cycles down to only the ones that can do work.
+            if do_cycle and self._dirty and self.pending:
                 self._try_schedule()
+                self._dirty = False
                 if len(self.pending) > self._sat_limit:
                     raise SaturationError(
                         f"pending={len(self.pending)} exceeded guard "

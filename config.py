@@ -221,6 +221,18 @@ class SchedulerConfig:
     # large capability jobs from small-job starvation). 0 = default to the
     # capacity-job threshold (20% of production nodes).
     reserve_min_nodes: int = 0
+    # PBS-faithful scheduling cycle: the scheduler recomputes priorities, sorts
+    # the queue, and runs one greedy+reservation+backfill pass once per cycle —
+    # NOT on every job event. Matches PBS Pro's scheduler_iteration (Aurora ~600s
+    # = 10 min). Between cycles, arrivals queue and finishes free nodes, but no
+    # (re)scheduling happens until the next cycle (so a job may wait up to one
+    # cycle after nodes free — real PBS behavior). Also the key perf lever: cost
+    # is O(cycles x P log P), independent of event count / load depth.
+    sched_cycle_h: float = 600.0 / 3600.0   # 10 minutes
+    # Beyond this many pending jobs, each cycle examines only the top-K by
+    # priority (partial select) — bounds per-cycle sort cost. PBS-like bounded
+    # per-iteration work. Large enough not to affect scheduling decisions.
+    examine_cap: int = 4000
 
 
 @dataclass(frozen=True)
