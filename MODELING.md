@@ -609,13 +609,22 @@ All four are **verified identical** to the pre-optimization scheduler on the
 regression configs (stage2_base bit-for-bit; starvation unit test 3/5→3/5). The
 Stage-2 sweep that previously had to be killed now runs in **~15 s**.
 
-**Remaining limitation (honest):** a *full-year* run at sustained load is still
-minutes, not seconds, because a congested period (e.g. INCITE's January burn)
-builds a deep pending queue that must be re-scored each active cycle. Also, a
-full-year 0.6× run reveals the queue slowly accumulates (util drops, a few large
-jobs unstarted near the horizon) — i.e. **0.6× is a stable operating point over
-weeks but not over a full year with 7-day small jobs.** That is a real finding,
-not a solver artifact; short/medium windows (≤~60 d) at ≤0.6× are the fast,
-stable regime for policy studies. Fully incremental re-scoring (only re-score
-jobs whose rank could have changed) is the next perf step if full-year-at-load
-studies become routine.
+**Performance envelope (acceptable):** short/medium windows (≤~60 d) at ≤0.6×
+load run in seconds; the Stage-2 sweep is ~15 s; a **full year at 0.6× completes
+in ~2 min** (well within the working budget). Full-year-at-load is minutes rather
+than seconds because a congested period (e.g. INCITE's January burn) builds a
+deep pending queue that is re-scored each active cycle — acceptable, not a defect.
+
+**Real finding from the full-year run (not a solver artifact):** at 0.6×
+historical load *with 7-day small jobs*, over a **full year** the small-job queue
+slowly accumulates — utilization settles to ~52 %, end-of-year pending ~19.3 K
+jobs (almost entirely `capacity`-tier small jobs; only ~12 large). So **0.6× is a
+stable operating point over weeks but NOT over a full year with 7-day small
+jobs** — a genuine statement about sustainable load. Large-job protection holds
+throughout: of 4,097 large jobs, only **31 go unstarted, and all 31 submitted in
+the final ~2 days** (horizon truncation, not starvation); large-job p95 wait
+~55 h. If you need to run at higher sustained load, either shorten small-job
+walltime, lower the arrival scale, or the queue must be understood as growing.
+
+Incremental re-scoring (only re-score jobs whose rank could have changed) remains
+a possible future optimization but is **not needed** at the current budget.
