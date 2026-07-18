@@ -19,7 +19,16 @@ import pandas as pd
 from config import SimConfig
 from generator import JobGenerator, load_trace
 from scheduler import Scheduler, SaturationError
+from compile_profiles import load_cache_df
 import metrics as M
+
+
+def load_input(cfg: SimConfig, cache: str | None):
+    """Load the sampler-input DataFrame from a compiled cache if given, else
+    from the trace DB. Cache path reproduces the DB path bit-for-bit."""
+    if cache:
+        return load_cache_df(cache, cfg)
+    return load_trace(cfg)
 
 
 def run_one(cfg: SimConfig, df, seed: int):
@@ -36,6 +45,9 @@ def run_one(cfg: SimConfig, df, seed: int):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--config", required=True, help="Path to SimConfig YAML.")
+    ap.add_argument("--cache", default=None,
+                    help="Path to a compiled profile cache (.npz). If given, load "
+                         "from it instead of the trace DB (fast; DB not needed).")
     ap.add_argument("--print-only", action="store_true",
                     help="Print resolved config + hash and exit (no run).")
     args = ap.parse_args()
@@ -51,10 +63,11 @@ def main():
     outdir.mkdir(parents=True, exist_ok=True)
     cfg.to_yaml(str(outdir / "resolved_config.yaml"))
 
-    print(f"Loading trace {cfg.trace_db} ...")
+    src = args.cache if args.cache else cfg.trace_db
+    print(f"Loading input {src} ...")
     t0 = time.time()
-    df = load_trace(cfg)
-    print(f"  {len(df):,} trace rows loaded in {time.time()-t0:.1f}s")
+    df = load_input(cfg, args.cache)
+    print(f"  {len(df):,} rows loaded in {time.time()-t0:.1f}s")
 
     seeds = [cfg.run.base_seed + i for i in range(cfg.run.n_seeds)]
     dtables, summaries = [], []

@@ -243,7 +243,9 @@ def build_project_samplers(df: pd.DataFrame, cfg: SimConfig) -> dict:
     Small projects (< min_project_jobs) are folded into a program-wide
     '<PROG>_misc' pseudo-project so we don't carry thousands of 1-job projects.
     """
-    span_h = (df["submit_time"].max() - df["submit_time"].min()).total_seconds() / 3600.0
+    span_h = df.attrs.get("span_h") if hasattr(df, "attrs") else None
+    if not span_h:
+        span_h = (df["submit_time"].max() - df["submit_time"].min()).total_seconds() / 3600.0
     over = cfg.projects.over_allocation
     min_jobs = cfg.projects.min_project_jobs
     load = cfg.generator.load_multiplier
@@ -312,7 +314,9 @@ class JobGenerator:
     def __init__(self, cfg: SimConfig, df: pd.DataFrame):
         self.cfg = cfg
         self.df = df
-        span_h = (df["submit_time"].max() - df["submit_time"].min()).total_seconds() / 3600.0
+        span_h = df.attrs.get("span_h") if hasattr(df, "attrs") else None
+        if not span_h:
+            span_h = (df["submit_time"].max() - df["submit_time"].min()).total_seconds() / 3600.0
         self.span_h = span_h
         self._tier_cfg = {t.name: t for t in cfg.size_tiers}
 

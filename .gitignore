@@ -22,3 +22,5 @@ slides.html
 # These are small, reproducible via scripts/make_modeling_figures.py, and needed
 # to render the modeling documentation on GitHub.
 !docs/figures/*.png
+data/*.npz
+results/example_scan/
