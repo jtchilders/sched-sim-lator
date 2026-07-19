@@ -52,12 +52,14 @@ def _win_rt(j: Job, duration_h: float) -> float:
 
 
 def timeseries(sched: Scheduler, cfg: SimConfig) -> pd.DataFrame:
-    """Tidy long-format: (t_h, metric, program|_all, value)."""
+    """Tidy long-format: (t_h, metric, program|_all, value).
+    Utilization is measured against PRODUCTION nodes (the accountability
+    denominator), consistent with summary_stats."""
     rows = []
-    tot = sched.total_nodes
+    prod = cfg.machine.prod()
     for t, busy in sched.util_samples:
         rows.append({"t_h": t, "metric": "utilization", "program": "_all",
-                     "value": busy / tot})
+                     "value": busy / prod})
         rows.append({"t_h": t, "metric": "busy_nodes", "program": "_all",
                      "value": busy})
     for t, prog_nh in sched.program_nh_samples:

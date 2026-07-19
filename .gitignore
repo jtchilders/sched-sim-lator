@@ -24,3 +24,4 @@ slides.html
 !docs/figures/*.png
 data/*.npz
 results/example_scan/
+results/

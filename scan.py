@@ -66,7 +66,24 @@ def _worker_init(cache_path: str):
 
 
 def _set_dotted(d: dict, dotted: str, value):
+    """Set a value by dotted path into the config dict.
+
+    Supports two special cases beyond plain nesting:
+      - size_tiers.<tier_name>.<field>  -> sets that field on the tier whose
+        name matches (e.g. size_tiers.large.base_priority). Lets a scan sweep a
+        single tier's base_priority/aging_rate/walltime_cap_h without pasting the
+        whole size_tiers list.
+      - programs.<program_name>.<field> -> same, for programs by name.
+    """
     keys = dotted.split(".")
+    # tier/program by-name addressing
+    if keys[0] in ("size_tiers", "programs") and len(keys) == 3:
+        lst = d.get(keys[0], [])
+        for item in lst:
+            if item.get("name") == keys[1]:
+                item[keys[2]] = value
+                return
+        raise KeyError(f"{keys[0]} has no entry named {keys[1]!r}")
     cur = d
     for k in keys[:-1]:
         cur = cur.setdefault(k, {})

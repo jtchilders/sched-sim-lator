@@ -1,0 +1,20 @@
+# Starter scan: score-function style x large-tier base_priority x large-tier
+# aging_rate. Uses per-tier dotted addressing (size_tiers.<name>.<field>) so we
+# sweep single tier params without pasting whole menus.
+#
+# 4 score styles x 3 large base_priorities x 3 large aging_rates x 2 seeds
+#   = 72 tasks. On Crux parton (128 cores, ~3s/run at this 60d/0.6x) ~ seconds.
+# Expand ranges / add tiers / raise seeds for the real study.
+name: score_priority_aging_scan
+base: configs/menu_scan_base.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 2
+params:
+  scheduler.score_expr:
+    - "base + aging_rate*wait"                                        # FIFO+aging
+    - "base + aging_rate*wait - 0.002*nodes"                          # small-favoring
+    - "base + aging_rate*wait + 5*log(nodes)"                         # big-favoring
+    - "base + aging_rate*wait + 30*(target_share - delivered_share)"  # fair-share pull
+  size_tiers.large.base_priority: [40, 80, 160]
+  size_tiers.large.aging_rate: [5.0, 10.0, 20.0]
