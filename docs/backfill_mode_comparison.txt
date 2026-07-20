@@ -1,0 +1,9 @@
+ load days         mode  util% started%  big_p95 small_p95
+  0.6   30 conservative   80.5      79%     28.1     189.2 (23s)
+  0.6   30         easy   79.0      99%     14.5       5.8 (3s)
+  0.9   20 conservative   68.9       5%    166.9     164.2 (40s)
+  0.9   20         easy   83.6      85%     44.9     126.9 (6s)
+  1.2   15 conservative   59.4       3%    127.3     216.2 (32s)
+  1.2   15         easy   99.9      57%     92.9     156.7 (15s)
+  1.5   12 conservative   52.7       2%    150.1     204.7 (26s)
+  1.5   12         easy   93.3      43%     97.6     171.0 (17s)
