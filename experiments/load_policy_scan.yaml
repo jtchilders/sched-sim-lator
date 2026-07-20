@@ -1,0 +1,21 @@
+# Load-axis scan: the KEY follow-up to score_priority_aging_scan.
+# Run #1 (0.6x) showed the system is demand-bound — policy knobs barely moved
+# utilization or delivered shares (only small-job wait). This scan crosses the
+# main policy knobs with LOAD to find the demand-bound -> policy-bound transition
+# where score/priority actually separate.
+#
+# 3 score styles x 4 loads x 2 large base_priorities x 2 seeds = 48 tasks.
+# (Kept modest; saturation guard will flag any oversubscribed cells as SATURATED
+#  rather than hang — expected at load 1.5 with 7-day-capable small jobs.)
+name: load_policy_scan
+base: configs/menu_scan_base.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 2
+params:
+  generator.load_multiplier: [0.6, 0.9, 1.2, 1.5]
+  scheduler.score_expr:
+    - "base + aging_rate*wait"                                        # FIFO+aging
+    - "base + aging_rate*wait + 30*(target_share - delivered_share)"  # fair-share pull
+    - "base + aging_rate*wait - 0.002*nodes"                          # small-favoring
+  size_tiers.large.base_priority: [80, 160]
