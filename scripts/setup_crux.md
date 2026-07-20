@@ -9,7 +9,7 @@ Workspace layout (all under `~/schedsim/` on Crux, per the plan):
 └── data/
     └── profiles_cache.npz   # scp'd from the Mac mini (the 9 GB DB stays home)
 
-/lus/eagle/projects/datascience/parton-ai/schedsim/experiments/  # scan outputs
+/lus/eagle/projects/Agentic-Sandbox-AI/parton-ai/schedsim/experiments/  # scan outputs
 ```
 
 ## 0. Compile the profile cache on the Mac mini (where the DB lives)
@@ -73,7 +73,7 @@ scp ~/workspaces/sched-sim-lator/data/profiles_cache.npz \
 ## 4. Confirm eagle write access (datascience project)
 
 ```bash
-mkdir -p /lus/eagle/projects/datascience/parton-ai/schedsim/experiments
+mkdir -p /lus/eagle/projects/Agentic-Sandbox-AI/parton-ai/schedsim/experiments
 # if permission denied, request parton-ai be added to the datascience unix group
 ```
 
@@ -90,7 +90,7 @@ python scan.py --spec experiments/example_scan.yaml \
 ```bash
 qsub -v SPEC=experiments/<your_scan>.yaml scripts/run_scan_crux.pbs
 qstat -u parton-ai
-# results -> /lus/eagle/projects/datascience/parton-ai/schedsim/experiments/<name>/results.parquet
+# results -> /lus/eagle/projects/Agentic-Sandbox-AI/parton-ai/schedsim/experiments/<name>/results.parquet
 ```
 
 Idempotent: if the job hits walltime, just `qsub` again — it resumes, skipping
@@ -99,7 +99,7 @@ completed (config_hash, seed) cells.
 ## 7. Pull results back to the Mac mini for analysis
 
 ```bash
-scp parton-ai@crux.alcf.anl.gov:/lus/eagle/projects/datascience/parton-ai/schedsim/experiments/<name>/results.parquet .
+scp parton-ai@crux.alcf.anl.gov:/lus/eagle/projects/Agentic-Sandbox-AI/parton-ai/schedsim/experiments/<name>/results.parquet .
 ```
 
 ## Throughput sizing

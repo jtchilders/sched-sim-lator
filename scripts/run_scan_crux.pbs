@@ -1,19 +1,22 @@
 #!/bin/bash
 #PBS -N schedsim_scan
 #PBS -q parton
-#PBS -l select=1:ncpus=128
-#PBS -l walltime=06:00:00
+#PBS -l select=1
+#PBS -l walltime=300
+#PBS -A Agentic-Sandbox-AI
+#PBS -l filesystems=home:eagle
 #PBS -j oe
 #
 # Batch scan on Crux `parton` (dedicated node, 128 cores).
 #
 # Runs a parameter scan defined by an experiment spec, using a compiled profile
 # cache (NOT the 9 GB trace DB — that stays on the Mac mini). Results land on
-# eagle under the datascience project.
+# eagle under the Agentic-Sandbox-AI project.
 #
 # Submit with:
 #   qsub -v SPEC=experiments/foo.yaml scripts/run_scan_crux.pbs
-# or edit the defaults below and `qsub scripts/run_scan_crux.pbs`.
+# (walltime/select/account/filesystems are set above; override on the qsub line
+#  if needed, e.g. -l walltime=3600.)
 #
 # Prereqs (one-time setup, see scripts/setup_crux.md):
 #   ~/schedsim/sched-sim-lator   (git clone)
@@ -28,7 +31,7 @@ set -euo pipefail
 : "${VENV:=$SCHEDSIM_ROOT/venv}"
 : "${CACHE:=$SCHEDSIM_ROOT/data/profiles_cache.npz}"
 : "${SPEC:=experiments/example_scan.yaml}"
-: "${PROJECT_DIR:=/lus/eagle/projects/datascience/parton-ai/schedsim}"
+: "${PROJECT_DIR:=/lus/eagle/projects/Agentic-Sandbox-AI/parton-ai/schedsim}"
 : "${WORKERS:=128}"
 
 EXP_NAME="$(basename "${SPEC%.*}")"
