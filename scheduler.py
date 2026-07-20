@@ -65,6 +65,7 @@ class Scheduler:
         # under load. Configurable via scheduler.reserve_min_nodes (0 => default).
         rmn = getattr(cfg.scheduler, "reserve_min_nodes", 0)
         self._reserve_min_nodes = rmn if rmn and rmn > 0 else int(round(0.20 * cfg.machine.prod()))
+        self._backfill_mode = getattr(cfg.scheduler, "backfill_mode", "easy")
         # Per-cycle examine cap: beyond this many pending jobs, only the top-K by
         # priority are examined (partial select). Bounds per-cycle sort cost.
         self._examine_cap = getattr(cfg.scheduler, "examine_cap", 4000) or 4000
@@ -301,9 +302,20 @@ class Scheduler:
         cap = self._examine_cap
         if len(self.pending) > cap:
             top = heapq.nsmallest(cap, keyed)
+            order = [k[2] for k in top]
+            # DEEP-QUEUE FIX: top-K-by-priority alone can hide small jobs that
+            # would backfill under a large job's reservation (they rank below the
+            # cap), leaving the machine idle. Add the K-smallest-by-node-count so
+            # backfill can always see fitting small jobs. Only affects the
+            # pending>cap regime; the sub-cap path (full sort) is unchanged.
+            in_order = set(order)
+            smallest = heapq.nsmallest(
+                cap, range(len(self.pending)),
+                key=lambda i: self.pending[i].nodes)
+            order.extend(i for i in smallest if i not in in_order)
         else:
             top = sorted(keyed)
-        order = [k[2] for k in top]
+            order = [k[2] for k in top]
 
         reservation_time: Optional[float] = None
         reserved_idx: Optional[int] = None
@@ -336,9 +348,20 @@ class Scheduler:
                     continue
                 if reservation_time is None:
                     continue
-                usable = self.free_nodes - reserved_nodes
-                if (j.nodes <= usable and self._can_start(j)
-                        and self.now_h + j.walltime_h <= reservation_time + 1e-9):
+                # Temporal guard (both modes): backfiller must finish before the
+                # reservation so it can't delay the reserved job.
+                if self.now_h + j.walltime_h > reservation_time + 1e-9:
+                    continue
+                # Spatial guard: "easy" (default, correct) only needs the job to
+                # fit in currently-free nodes (_can_start). "conservative"
+                # additionally requires co-fit alongside the full reserved job,
+                # which can idle the machine under deep queues — kept for
+                # provenance/comparison via scheduler.backfill_mode.
+                if self._backfill_mode == "conservative":
+                    usable = max(0, self.free_nodes - reserved_nodes)
+                    if j.nodes > usable:
+                        continue
+                if self._can_start(j):
                     self._start(j, idx, removed)
 
         # The reserved job may now be startable (nodes drained/freed within this

@@ -197,6 +197,7 @@ behavior:
 | `budget_damp_strength` | 8.0 | PRIMARY | How sharply a program's priority damps past its pro-rated budget (feeds the `budget_damp` variable). |
 | `policy` | budget | CONTEXT | `blind` (program-agnostic) or `budget` (budget-damped priority + overburn cap). |
 | `reserve_min_nodes` | 0 → 1920 | **PRIMARY** | **Large-job-starvation lever.** Draining reservation engages only for jobs ≥ this (0 = default capacity threshold). Below it, blocked jobs just wait. This is what protects 10k-node jobs. |
+| `backfill_mode` | easy | CONTEXT | EASY-backfill semantics under a held reservation. `easy` (default, PBS-correct): a job backfills if it fits in free nodes now AND finishes before the reservation time. `conservative`: also requires spatial co-fit alongside the full reserved job — more conservative, can idle the machine under deep queues; reproduces the earliest published low-load numbers. |
 | `sched_cycle_h` | 0.1667 (600s) | REGIME/PERF | **PBS `scheduler_iteration`.** One scheduling pass per cycle, not per event — fidelity match + perf fix. Also a research knob (cycle length vs. wait). |
 | `examine_cap` | 4000 | PERF | Beyond this many pending jobs, only the top-K by priority are examined per cycle (mirrors PBS `backfill_depth`). |
 

@@ -221,6 +221,18 @@ class SchedulerConfig:
     # large capability jobs from small-job starvation). 0 = default to the
     # capacity-job threshold (20% of production nodes).
     reserve_min_nodes: int = 0
+    # EASY backfill semantics under a held reservation:
+    #   "easy"  (default) — standard EASY: a job backfills if it fits in
+    #           currently-free nodes AND finishes before the reservation time.
+    #           Correct/PBS-faithful; keeps the machine packed under deep queues.
+    #   "conservative" — additionally requires the backfiller to spatially co-fit
+    #           alongside the full reserved job (free - reserved_nodes). More
+    #           conservative (lower small-job backfill); can idle the machine under
+    #           deep queues when the reserved job is bigger than current free nodes.
+    # NOTE: switching to "easy" changes low-load small-job wait vs the earliest
+    # (pre-fix) runs — "easy" is the correct behavior; "conservative" reproduces
+    # the older numbers. Kept configurable for provenance / comparison.
+    backfill_mode: str = "easy"
     # PBS-faithful scheduling cycle: the scheduler recomputes priorities, sorts
     # the queue, and runs one greedy+reservation+backfill pass once per cycle —
     # NOT on every job event. Matches PBS Pro's scheduler_iteration (Aurora ~600s

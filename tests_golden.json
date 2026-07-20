@@ -1,0 +1,32 @@
+{
+  "stage2_base.yaml|run.duration_days=20,scheduler.backfill_mode=conservative|seed42": {
+    "n_jobs": 16087,
+    "n_started": 16080,
+    "avg_util_pct": 81.06,
+    "n_big_jobs": 293,
+    "n_big_unstarted": 0,
+    "big_wait_p95_h": 11.91,
+    "small_wait_p95_h": 29.34,
+    "wait_p95_h": 29.16
+  },
+  "menu_scan_base.yaml|generator.load_multiplier=0.4,run.duration_days=20,scheduler.backfill_mode=conservative|seed42": {
+    "n_jobs": 10759,
+    "n_started": 10755,
+    "avg_util_pct": 48.08,
+    "n_big_jobs": 203,
+    "n_big_unstarted": 0,
+    "big_wait_p95_h": 5.49,
+    "small_wait_p95_h": 9.81,
+    "wait_p95_h": 9.61
+  },
+  "menu_scan_base.yaml|generator.load_multiplier=0.6,run.duration_days=20,scheduler.backfill_mode=conservative|seed42": {
+    "n_jobs": 16087,
+    "n_started": 15955,
+    "avg_util_pct": 77.05,
+    "n_big_jobs": 293,
+    "n_big_unstarted": 0,
+    "big_wait_p95_h": 12.75,
+    "small_wait_p95_h": 35.71,
+    "wait_p95_h": 35.51
+  }
+}
