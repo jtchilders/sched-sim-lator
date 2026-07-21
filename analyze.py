@@ -182,14 +182,17 @@ def write_outputs(out: dict, cfg: SimConfig, outdir: pathlib.Path):
     for a in ax: a.grid(alpha=.3, axis="y")
     fig.tight_layout(); fig.savefig(outdir / "program_allocation.png", dpi=110); plt.close(fig)
 
-    # (6) project utilization histogram by program
+    # (6) project utilization histogram by program (STACKED so all programs
+    # are visible — overlapping alpha bars hid the smaller ALCC series).
     pu = out["project_utilization"]
     if not pu.empty:
         fig, ax = plt.subplots(figsize=(10, 4.5))
         bins = np.arange(0, 210, 10)
-        for prog, g in pu.groupby("program"):
-            ax.hist(g["pct_alloc_used"].clip(0, 200), bins=bins, alpha=.5,
-                    label=f"{prog} (n={len(g)})")
+        progs = sorted(pu["program"].unique())
+        data = [pu[pu["program"] == pr]["pct_alloc_used"].clip(0, 200).to_numpy()
+                for pr in progs]
+        labels = [f"{pr} (n={len(pu[pu['program']==pr])})" for pr in progs]
+        ax.hist(data, bins=bins, stacked=True, label=labels)
         ax.axvline(100, ls="--", color="k", alpha=.6, label="100% of award")
         ax.set_xlabel("% of allocation utilized"); ax.set_ylabel("# projects")
         ax.set_title("Projects by program, binned by % of allocation used")
