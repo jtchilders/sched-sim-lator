@@ -186,24 +186,66 @@ class ConditionalSampler:
         return int(nodes), float(wt), runtime
 
 
-def fit_burn_curve(df: pd.DataFrame, prog_cfg: ProgramConfig) -> np.ndarray:
+def fit_burn_curve(df: pd.DataFrame, prog_cfg: ProgramConfig,
+                   min_coverage_frac: float = 0.40,
+                   min_mult_floor: float = 0.40) -> np.ndarray:
     """Length-12 multiplier on ARRIVAL RATE keyed on alloc-month-offset.
     Normalized to mean 1.0 over active months so the base arrival rate stays the
-    annual average."""
+    annual average.
+
+    LOW-DATA MONTH SMOOTHING: the trace under-covers some months. **June** is a
+    true coverage artifact (trace starts mid-June / ends early-June: ~3 weeks
+    split across two partial years, e.g. 3 INCITE jobs in 2025-06). **July** is a
+    real but low summer lull. Both otherwise fit tiny multipliers that produce a
+    spurious ~50-day mid-year utilization collapse. Any month whose job COUNT is
+    below `min_coverage_frac` x the median month's count has its multiplier
+    replaced by the mean of its (circular) neighbors, then the curve is
+    renormalized.
+
+    NOTE on the 0.40 default: this smooths BOTH June (coverage artifact) AND July
+    (a real summer lull) — a deliberate modeling CHOICE to keep the simulated
+    year flat rather than reproduce the trace's summer dip. It discards a real
+    (if noisy) signal; set min_coverage_frac lower (~0.20) to keep July's lull,
+    or 0 to disable smoothing entirely. Config-adjustable per study.
+    """
     sub = df[df["program"] == prog_cfg.name].copy()
     sub["alloc_off"] = sub["cal_month"].apply(
         lambda m: _alloc_month_offset(m, prog_cfg.alloc_year_start_month))
     sub["nh"] = sub["nodes"] * sub["runtime_h"]
-    by_off = sub.groupby("alloc_off")["nh"].sum()
+    by_off_nh = sub.groupby("alloc_off")["nh"].sum()
+    by_off_n = sub.groupby("alloc_off").size()
     mult = np.ones(12)
-    if by_off.sum() > 0:
+    if by_off_nh.sum() > 0:
         for off in range(12):
-            if off in by_off.index:
-                mult[off] = by_off[off]
-        present = [o for o in by_off.index]
+            if off in by_off_nh.index:
+                mult[off] = by_off_nh[off]
+        present = [o for o in by_off_nh.index]
         vals = mult[present]
         if vals.mean() > 0:
             mult[present] = vals / vals.mean()
+
+        # Low-data / low-demand month smoothing: interpolate a month from its
+        # neighbors if EITHER it is under-covered (job count < min_coverage_frac
+        # x median) OR its fitted multiplier is below min_mult_floor (a month so
+        # low it would idle the machine — whether from thin coverage or a real
+        # lull). Both criteria are config knobs; set to 0 to disable.
+        if len(by_off_n) > 2 and (min_coverage_frac > 0 or min_mult_floor > 0):
+            counts = np.zeros(12)
+            for off in range(12):
+                counts[off] = by_off_n.get(off, 0)
+            present_counts = counts[counts > 0]
+            med = np.median(present_counts) if len(present_counts) else 0.0
+            cthresh = med * min_coverage_frac
+            low = [off for off in range(12)
+                   if (min_coverage_frac > 0 and counts[off] < cthresh)
+                   or (min_mult_floor > 0 and off in present and mult[off] < min_mult_floor)]
+            for off in low:
+                # neighbor mean over the nearest non-low months (circular)
+                lo = mult[(off - 1) % 12]
+                hi = mult[(off + 1) % 12]
+                mult[off] = (lo + hi) / 2.0
+            if mult[present].mean() > 0:
+                mult[present] = mult[present] / mult[present].mean()
     return mult
 
 

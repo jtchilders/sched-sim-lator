@@ -197,14 +197,26 @@ comparatively flat with no strong cycle.
 after July and ramps toward spring; DD (green) is roughly flat. The curves are
 noisy because the trace is only 357 days (see limitation below).*
 
-**Honest limitation.** The trace is only 357 days, so each alloc-offset bin has
-partial coverage and some multipliers are noisy artifacts rather than clean
-seasonality — e.g. INCITE offset-5 = 0.05 and ALCC offset-0 = 0.18 are
-single-window observations, not robust annual means. These curves capture the
-*shape* (fast vs slow starters, year-end burn) but should not be over-read at
-the individual-month level. With more than one full allocation cycle of data
-they would stabilize. The burn curve is a config-adjustable input, so a user
-can override it with a smoothed or hypothetical curve.
+**Honest limitation + coverage correction.** The trace is only 357 days
+(2025-06-12 → 2026-06-04), so each calendar month has partial coverage and some
+multipliers are noisy. **June is severely under-covered** — the trace starts
+mid-June and ends early-June, so June has only ~3 weeks of data split across two
+partial years (e.g. 3 INCITE jobs in 2025-06). Uncorrected, June fit a ~0.05
+multiplier for all programs simultaneously and produced a **spurious ~50-day
+mid-year utilization collapse** (util dropped to ~13% for days 150–200 of a
+Jan-start run) — a pure trace-boundary artifact, not real Aurora behavior.
+
+`fit_burn_curve` now applies **low-data / low-demand month smoothing** (two
+config knobs): a month is neighbor-interpolated if EITHER its job *count* is below
+`min_coverage_frac` × the median month (default 0.40 — catches June's coverage
+gap) OR its fitted multiplier is below `min_mult_floor` (default 0.40 — catches
+any month so low it would idle the machine, e.g. July's summer lull even though
+July has real data). Both default to 0.40; set either to 0 to disable. This is
+**deliberately a smoothing choice**, not purely an artifact fix: it flattens the
+real (if noisy) summer lull to keep the simulated year believable, and is fully
+reversible per study. Result: no month's multiplier falls near zero, removing the
+spurious mid-year collapse; remaining month-to-month variation is genuine
+seasonality. Curves would stabilize with >1 full allocation cycle of data.
 
 Code: `generator.fit_burn_curve`.
 
