@@ -1,0 +1,16 @@
+# HEADLINE Stage-2 sweep (scan.py format): how long can small jobs run before
+# large (>=1920-node) jobs get starved? Varies the small-job walltime cap (first
+# breakpoint) 24h -> 7 days, holding the full-machine cap at 24h. Under easy
+# backfill + the draining reservation. Read big_wait_p95 (must stay low) vs
+# small_wait_p95 vs avg_util.
+name: stage2_small_walltime_sweep
+base: configs/stage2_base.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 2
+params:
+  walltime_policy.breakpoints:
+    - [[1, 24],  [512, 24], [1920, 24]]    # baseline: everyone 24h
+    - [[1, 48],  [512, 48], [1920, 24]]    # small up to 48h
+    - [[1, 96],  [512, 48], [1920, 24]]    # small up to 96h
+    - [[1, 168], [512, 48], [1920, 24]]    # small up to 7 days (the AI ask)
