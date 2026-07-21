@@ -534,14 +534,18 @@ point (0.6× historical load, 9,600 production nodes, draining reservation on):
 
 | Small-job cap | Large-job (≥1920) p95 wait | Large jobs starved | Small-job p95 wait | Utilization |
 |---------------|---------------------------:|-------------------:|-------------------:|------------:|
-| 24h           | 11.8 h                     | 0                  | 28.4 h             | 81.0 %      |
-| 48h (2 d)     | 11.8 h                     | 0                  | 29.1 h             | 80.5 %      |
-| 96h (4 d)     | 12.4 h                     | 0                  | 29.1 h             | 79.5 %      |
-| **168h (7 d)**| **11.9 h**                 | **0**              | **29.3 h**         | **81.1 %**  |
+| 24h           | 7.5 h                      | 0                  | 4.9 h              | 77.9 %      |
+| 48h (2 d)     | 7.8 h                      | 0                  | 4.9 h              | 78.4 %      |
+| 96h (4 d)     | 8.5 h                      | 0                  | 5.3 h              | 80.2 %      |
+| **168h (7 d)**| **9.3 h**                  | **0**              | **6.4 h**          | **82.1 %**  |
 
-(Numbers under the PBS-faithful scheduling cycle; see §10. The conclusion is
-identical to the pre-cycle model: large-job wait is flat and no large job
-starves regardless of the small-job cap.)
+(Numbers under `backfill_mode: easy` — standard PBS EASY backfill, the canonical
+default; see §10/§11. The conclusion is unchanged from earlier runs — large-job
+wait barely moves and no large job starves regardless of the small-job cap — and
+sharper: correct backfill gives lower waits across the board and utilization
+rises with the cap. NOTE: an earlier version of this table showed higher waits
+(~12 h / ~29 h) computed under the non-standard `conservative` backfill guard,
+which was later found to be a bug — see §11.)
 
 **Conclusion for the committee:** with a draining EASY reservation protecting
 large jobs, small jobs can be granted the full **7-day** walltime at **~zero
@@ -628,3 +632,64 @@ walltime, lower the arrival scale, or the queue must be understood as growing.
 
 Incremental re-scoring (only re-score jobs whose rank could have changed) remains
 a possible future optimization but is **not needed** at the current budget.
+
+---
+
+## 11. Backfill semantics (`backfill_mode`) and the deep-queue idle bug
+
+While running the load scan (policy × `load_multiplier` ∈ {0.6…1.5}) a **real
+scheduler bug** surfaced: at high load (offered load ≳ 0.9×, pending queue deeper
+than `examine_cap`) the machine **drained fully idle** — utilization 53–64 %,
+only 2–6 % of jobs ever started, tens of thousands of fitting jobs waiting on an
+empty machine. Two coupled causes:
+
+1. **`examine_cap` hid backfillers.** The per-cycle top-K-by-priority
+   partial-select (a perf bound) meant that under a deep queue the examined set
+   was all large blocked jobs; the small jobs that backfill needs ranked below K
+   and were never seen. Fixed by examining the **union of top-K-by-priority and
+   K-smallest-by-node-count**.
+2. **A non-standard backfill guard.** The original code additionally required a
+   backfiller to spatially co-fit *alongside the full reserved job*
+   (`free − reserved_nodes`), which goes negative when the reserved job is larger
+   than currently-free nodes — killing all backfill. Standard PBS EASY only
+   requires a backfiller to (a) fit in currently-free nodes and (b) finish before
+   the reservation *time*. This is now the default; the old behavior is retained
+   as `backfill_mode: conservative` for provenance.
+
+**`backfill_mode` (canonical = `easy`).** `easy` is standard PBS EASY backfill
+and the correct/default. `conservative` reproduces the earlier (buggy)
+over-conservative guard. A head-to-head across load makes the difference stark:
+
+| load | conservative — jobs started | easy — jobs started |
+|------|----------------------------:|--------------------:|
+| 0.6× | 79 % | 99 % |
+| 0.9× | **5 %** (idle-machine bug) | 85 % |
+| 1.2× | **3 %** | 57 % |
+| 1.5× | **2 %** | 43 % |
+
+So `conservative` is the *buggy* behavior, not a defensible policy; `easy` is
+canonical. (Guarded by `test_scheduler_regression.py`: golden low-load numbers
+pinned under `conservative` stay byte-exact, high-load invariants pass under
+`easy`.)
+
+### Corrected load-scan finding (easy mode)
+
+Re-running the load scan under `easy` gives physically-sensible results and a
+sharpened conclusion:
+
+| load | utilization | jobs started | large-job p95 wait |
+|------|------------:|-------------:|-------------------:|
+| 0.6× | 64 % | 99.9 % | 13 h |
+| 0.9× | 93 % | 99.9 % | 63 h |
+| 1.2× | 97 % | 50 % | 204 h |
+| 1.5× | 99.5 % | 57 % | 492 h |
+
+Utilization now correctly climbs with load (the demand-bound → policy-bound
+transition), saturating ~0.9× and going into genuine oversubscription (growing
+backlog, rising waits) at ≥1.2×. **Important correction:** under *correct*
+backfill, the score-function choice (fair-share vs FIFO vs small-favoring) barely
+moves small-job wait at any load (e.g. at 1.2×: 820 vs 812 h). The earlier
+tentative "fair-share helps under contention" read was partly an artifact of the
+buggy scheduler. The robust conclusion across both stages: **the dominant levers
+are load/capacity and the walltime menu + reservation discipline — not
+score-function tuning.**

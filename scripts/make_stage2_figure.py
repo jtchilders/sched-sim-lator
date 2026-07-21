@@ -22,20 +22,34 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 OUT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                    "docs", "figures")
 os.makedirs(OUT, exist_ok=True)
+# Prefer the easy-mode scan.py parquet; fall back to the old sweep.py CSV.
+PARQUET = "results/crux_stage2_easy.parquet"
 CSV = "results/stage2_small_walltime_sweep/sweep_results.csv"
 
 
-def _small_cap(bp_str):
-    # breakpoints stored as string like "[[1, 168], [512, 48], [1920, 24]]"
+def _small_cap(bp):
+    # breakpoints may be a JSON/py-literal string (parquet 'label') or a list.
     import ast
-    bp = ast.literal_eval(bp_str)
+    if isinstance(bp, str):
+        bp = ast.literal_eval(bp)
     return bp[0][1]  # walltime at the 1-node breakpoint
 
 
 def main():
-    df = pd.read_csv(CSV)
-    df = df[df["status"] == "OK"].copy()
-    df["small_cap_h"] = df["walltime_policy.breakpoints"].map(_small_cap)
+    if os.path.exists(PARQUET):
+        df = pd.read_parquet(PARQUET)
+        df = df[df["status"] == "OK"].copy()
+        df["small_cap_h"] = df["walltime_policy.breakpoints"].map(_small_cap)
+        # aggregate over seeds
+        df = (df.groupby("small_cap_h")
+                .agg(big_wait_p95_h=("big_wait_p95_h", "mean"),
+                     small_wait_p95_h=("small_wait_p95_h", "mean"),
+                     avg_util_pct=("avg_util_pct", "mean"))
+                .reset_index())
+    else:
+        df = pd.read_csv(CSV)
+        df = df[df["status"] == "OK"].copy()
+        df["small_cap_h"] = df["walltime_policy.breakpoints"].map(_small_cap)
     df = df.sort_values("small_cap_h")
 
     fig, ax = plt.subplots(figsize=(9, 5.2))
@@ -62,16 +76,17 @@ def main():
                           zip(df["small_cap_h"], df["avg_util_pct"]))
     ax.set_title("Small jobs can run up to 7 days at ~zero cost to large-job wait\n"
                  "single queue + max_walltime(nodes) + draining EASY reservation "
-                 "(9600 production nodes)\n"
-                 f"large-job wait flat ~11h · 0 large jobs starved · "
+                 "(9600 production nodes; backfill_mode=easy)\n"
+                 f"large-job wait ~7-9h · 0 large jobs starved · "
                  f"utilization: {util_txt}", fontsize=9.5)
     fig.tight_layout()
     path = os.path.join(OUT, "stage2_small_walltime_vs_bigwait.png")
     fig.savefig(path, dpi=120, bbox_inches="tight")
     plt.close(fig)
     print(f"wrote {os.path.relpath(path)}")
-    print(df[["small_cap_h", "big_wait_p95_h", "n_big_unstarted",
-              "small_wait_p95_h", "avg_util_pct"]].to_string(index=False))
+    cols = [c for c in ["small_cap_h", "big_wait_p95_h", "small_wait_p95_h",
+                        "avg_util_pct"] if c in df.columns]
+    print(df[cols].to_string(index=False))
 
 
 if __name__ == "__main__":
