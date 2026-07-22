@@ -92,3 +92,71 @@ python analyze_scan.py --results results/capacity_aging_sweep/results.parquet --
 ```
 
 ---
+
+## Studies 2–8 — all remaining score-function parameters
+
+**Design:** one MC sweep per parameter, 6 values × 10 seeds, full year, everything
+else fixed. Parameters: `base_priority` for all four tiers, and `aging_rate` for
+small/medium/large (capacity `aging_rate` = Study 1). Specs:
+`experiments/<tier>_<param>_sweep.yaml`. 420 full-year runs total on Crux `parton`.
+
+### Cross-study headline
+
+**Every score-function parameter is a WAIT-TIME lever; NONE is a node-hour
+DELIVERY lever.** This held across all 8 parameters without exception:
+
+- **Node-hour delivery to programs is flat** — the max−min effect on INCITE
+  delivered node-hours ranged **0.05 %–1.44 %** across every knob, at or below
+  the seed-noise floor (~0.5 %). No score parameter meaningfully changes *what
+  gets delivered to whom*.
+- **Utilization is flat** — spreads of 0.2–0.9 percentage points everywhere
+  (the system is demand-bound at 1.0× historical load).
+- **Wait time moves a lot, and `aging_rate` dominates `base_priority`:**
+
+  | parameter | effect on wait p95 (max−min, h) | effect on INCITE delivery |
+  |-----------|-------------------------------:|--------------------------:|
+  | small_aging_rate   | 266 | 1.17 % |
+  | large_aging_rate   | 262 | 1.44 % |
+  | capacity_aging_rate| 209 | 0.52 % |
+  | medium_aging_rate  | 192 | 0.81 % |
+  | large_base_priority   | 64 | 0.38 % |
+  | medium_base_priority  | 45 | 0.18 % |
+  | small_base_priority   | 41 | 0.07 % |
+  | capacity_base_priority| 39 | 0.05 % |
+
+  **aging_rate knobs move wait 4–6× more than base_priority knobs.**
+
+![cross-study score sensitivity](figures/cross_study_score_sensitivity.png)
+
+### The committee-ready conclusion
+
+At the historical demand level, **score-function tuning redistributes *when jobs
+wait*, but cannot change *how the machine's node-hours are allocated to
+programs*.** Allocation delivery is set by demand + capacity (and, where enabled,
+budget/reservation policy), not by priority scoring. **If the goal is to steer
+node-hour delivery, the score function is the wrong lever** — reach for budget
+policy, capacity protection, the queue menu (walltime caps), or the load regime.
+The score function *is* the right lever for **wait-time / fairness** tuning, where
+`aging_rate` is the strong control and `base_priority` a weak one.
+
+### Per-parameter notes
+
+- **`aging_rate` (all tiers)** — strong, **non-monotonic** effect on wait, same
+  inverted-hump shape as Study 1: **zero aging gives the lowest wait** (jobs run
+  FIFO-by-base with no churn: small=31 h, medium=41 h, large=99 h at aging 0),
+  then a *small* nonzero aging **worsens** wait to a peak (small peaks 297 h at
+  1.0, large 361 h at 2.5), after which higher aging **reduces** wait again.
+  Practical read: either no aging, or *enough* aging — a little is the worst of
+  both. Stability (CV) is worst at the low-but-nonzero peak and best at high
+  aging.
+- **`base_priority` (all tiers)** — weak effect on wait (≤64 h span), mostly
+  flat with a mild downward drift at very high values; no effect on delivery or
+  utilization. Tuning a single tier's base priority in isolation does little
+  because the *relative* ordering across tiers (and aging) dominates.
+
+Reproduce (example): `python scan.py --spec experiments/small_aging_rate_sweep.yaml
+--cache data/profiles_cache.npz --out results/small_aging_rate_sweep` then
+`analyze_scan.py --objective wait_p95_h`. Per-study main-effect + box plots under
+`docs/reports/figures/<study>/`.
+
+---
