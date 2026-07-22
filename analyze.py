@@ -119,6 +119,16 @@ def analyze(cfg: SimConfig, df, seed: int):
     out["project_utilization"] = pd.DataFrame(proj_rows)
 
     out["_summary"] = M.summary_stats(jobs, sched, cfg)
+
+    # Config characterization: per-program burn curves across the calendar year
+    # (the seasonal arrival-rate multiplier that shaped this run's demand).
+    from generator import fit_burn_curve, _alloc_month_offset
+    burn = {}
+    for p in cfg.programs:
+        bc = fit_burn_curve(df, p)
+        smonth = p.alloc_year_start_month
+        burn[p.name] = [float(bc[_alloc_month_offset(m, smonth)]) for m in range(1, 13)]
+    out["_burn_curves"] = burn
     return out
 
 
@@ -199,7 +209,106 @@ def write_outputs(out: dict, cfg: SimConfig, outdir: pathlib.Path):
         ax.legend(); ax.grid(alpha=.3, axis="y")
         fig.tight_layout(); fig.savefig(outdir / "project_utilization.png", dpi=110); plt.close(fig)
 
+    # (7) CONFIG CHARACTERIZATION: burn curves across the calendar year.
+    burn = out.get("_burn_curves", {})
+    if burn:
+        months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                  "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+        fig, ax = plt.subplots(figsize=(11, 4.2))
+        for prog, vals in burn.items():
+            ax.plot(range(12), vals, marker="o", lw=2, label=prog)
+        ax.axhline(1.0, color="k", ls=":", alpha=.5, label="mean (1.0)")
+        ax.set_xticks(range(12)); ax.set_xticklabels(months)
+        ax.set_xlabel("calendar month")
+        ax.set_ylabel("arrival-rate multiplier")
+        ax.set_title("INPUT: per-program seasonal burn curves (demand shape driving this run)")
+        ax.grid(alpha=.3); ax.legend(fontsize=9)
+        fig.tight_layout(); fig.savefig(outdir / "burn_curves.png", dpi=110); plt.close(fig)
+        # also dump the numeric curves
+        pd.DataFrame(burn, index=months).to_csv(outdir / "burn_curves.csv")
+
+    # (8) CONFIG CHARACTERIZATION: run config card (tiers, score, programs, run).
+    _render_config_card(cfg, out, outdir, plt)
+
     print(f"Wrote CSVs + plots -> {outdir}/")
+
+
+def _render_config_card(cfg, out, outdir, plt):
+    """One-page image summarizing the configuration that produced this run:
+    machine, size-tier menu, scheduler/score, programs/allocation, generator/run."""
+    prod = cfg.machine.prod()
+    sc = cfg.scheduler
+    lines = []
+    lines.append(("MACHINE", ""))
+    lines.append(("  total / production nodes",
+                  f"{cfg.machine.total_nodes} / {prod}   "
+                  f"(capacity job \u2265 {int(round(0.20*prod))} nodes = 20%)"))
+    lines.append(("", ""))
+    lines.append(("SIZE-TIER MENU", "min\u2013max nodes | walltime cap | base_prio | aging"))
+    if cfg.walltime_policy.enabled:
+        lines.append(("  walltime_policy", "ENABLED (per-tier caps overridden)"))
+        for mn, wt in cfg.walltime_policy.breakpoints:
+            lines.append((f"    \u2265{mn} nodes", f"max walltime {wt} h"))
+    for t in cfg.size_tiers:
+        lines.append((f"  {t.name}",
+                      f"{t.min_nodes}\u2013{t.max_nodes} | {t.walltime_cap_h} h | "
+                      f"base {t.base_priority} | aging {t.aging_rate}"))
+    lines.append(("", ""))
+    lines.append(("SCHEDULER / SCORE", ""))
+    lines.append(("  score_expr", sc.score_expr))
+    lines.append(("  policy / backfill_mode", f"{sc.policy} / {sc.backfill_mode}"))
+    lines.append(("  reserve_min_nodes",
+                  f"{sc.reserve_min_nodes or int(round(0.20*prod))} "
+                  f"(0\u2192capacity threshold)"))
+    lines.append(("  sched_cycle_h / budget_damp",
+                  f"{sc.sched_cycle_h:.4f} h ({sc.sched_cycle_h*3600:.0f}s) / "
+                  f"{sc.budget_damp_strength}"))
+    lines.append(("", ""))
+    lines.append(("PROGRAMS / ALLOCATION", "target | overburn | soft_floor | yr-start"))
+    for p in cfg.programs:
+        lines.append((f"  {p.name}",
+                      f"{p.target_share:.0%} | +{p.overburn:.0%} | "
+                      f"{p.soft_floor} | month {p.alloc_year_start_month}"))
+    g = cfg.genesis
+    lines.append(("  Genesis",
+                  (f"ON: {g.scenario} @ {g.share:.0%} from {g.genesis_from}"
+                   if g.enabled else "off")))
+    pj = cfg.projects
+    lines.append(("  projects",
+                  (f"ON: over_alloc {pj.over_allocation}x, "
+                   f"damp {pj.project_damp_strength}" if pj.enabled else "off")))
+    lines.append(("  deadlines", "ON" if cfg.deadlines.enabled else "off"))
+    lines.append(("", ""))
+    lines.append(("GENERATOR / RUN", ""))
+    lines.append(("  load_multiplier", f"{cfg.generator.load_multiplier}x historical"))
+    lines.append(("  duration / start_month",
+                  f"{cfg.run.duration_days:.0f} d | month {cfg.run.start_month}"))
+    lines.append(("  seeds", f"{cfg.run.n_seeds} (base {cfg.run.base_seed})"))
+    lines.append(("  config_hash", cfg.config_hash()))
+    s = out.get("_summary", {})
+    lines.append(("", ""))
+    lines.append(("KEY OUTPUTS", ""))
+    lines.append(("  integrated utilization", f"{out.get('integrated_utilization',0)*100:.1f}%"))
+    lines.append(("  started / total jobs",
+                  f"{s.get('n_started','?')} / {s.get('n_jobs','?')}"))
+
+    fig, ax = plt.subplots(figsize=(10, max(6, 0.32 * len(lines))))
+    ax.axis("off")
+    y = 1.0
+    dy = 1.0 / (len(lines) + 1)
+    for key, val in lines:
+        bold = key and not key.startswith("  ") and val == "" or (
+            key and not key.startswith(" ") and key.isupper())
+        header = key and not key.startswith(" ")
+        ax.text(0.01, y, key, fontsize=10, family="monospace",
+                fontweight="bold" if header else "normal",
+                color="#1a5276" if header else "black", va="top")
+        ax.text(0.42, y, val, fontsize=9.5, family="monospace", va="top")
+        y -= dy
+    ax.set_title(f"RUN CONFIG CARD  ({outdir.name})", fontsize=12, fontweight="bold")
+    fig.tight_layout()
+    fig.savefig(outdir / "run_config_card.png", dpi=110, bbox_inches="tight")
+    plt.close(fig)
 
 
 def main():
