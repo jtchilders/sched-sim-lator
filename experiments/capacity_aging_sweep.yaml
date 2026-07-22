@@ -1,0 +1,16 @@
+# STUDY: how does the CAPACITY-tier aging_rate affect the system?
+# One knob varied, everything else fixed. Full year, projects on, Genesis off
+# (historical-baseline setup, base = configs/baseline_fullyear.yaml).
+# Monte Carlo: 10 seeds per aging_rate value (screening tier). Reduce with
+# analyze_scan.py; the swept param is size_tiers.capacity.aging_rate.
+#
+# Range around the 0.5 default: 0.0 (no aging — pure FIFO+base) up to 8.0
+# (aging strongly dominates base priority for capacity jobs). 7 values x 10 seeds
+# = 70 full-year runs (~minutes each; a single parton batch job).
+name: capacity_aging_sweep
+base: configs/baseline_fullyear.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 10
+params:
+  size_tiers.capacity.aging_rate: [0.0, 0.25, 0.5, 1.0, 2.0, 4.0, 8.0]
