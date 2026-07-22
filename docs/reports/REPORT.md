@@ -59,24 +59,44 @@ runs. Spec: `experiments/capacity_aging_sweep.yaml`.
    meaningless. The 10-seed ensemble is what makes this visible. Stability
    improves monotonically as aging rises (CV 0.72 → 0.15).
 
-### Interpretation & caveat
+### Cross-queue analysis (RESOLVES the caveat: who pays?)
 
-Raising capacity aging accelerates how fast capacity jobs climb over their (low)
-base priority, changing *which* jobs wait. The p95 drop at high aging likely
-reflects redistribution of wait (capacity jobs cleared faster) more than a
-reduction in *total* system wait — this is an overall p95, not per-queue. A
-follow-up breaking wait down per queue (capacity vs small/medium/large) would
-confirm whether high aging helps capacity jobs at the expense of others.
+The pooled p95 above hid *which* queue pays. Breaking wait down per queue shows
+capacity aging is a **"help capacity, hurt everyone else" lever** — the pooled
+"aging=8 is best" was misleading because capacity jobs (the huge majority) dominate
+the pooled number:
+
+| capacity aging_rate | **capacity** wait | small wait | medium wait | large wait |
+|--------------------:|------------------:|-----------:|------------:|-----------:|
+| 0.0                 | 53 h              | 266 h      | 70 h        | 52 h       |
+| 1.0                 | ~209 h (peak)     | ~265 h     | ~90 h       | ~70 h      |
+| 8.0                 | **40 h (best)**   | **489 h**  | **147 h**   | **95 h**   |
+
+Pushing capacity aging from 0 → 8 nearly halves capacity wait (53→40 h) but
+**doubles small (266→489 h), doubles medium (70→147 h), and nearly doubles large
+(52→95 h).** Throughput is essentially unchanged in every queue (large stays
+~7.7 jobs/day throughout), so this redistributes *wait-priority*, not delivery.
+
+**Practical read:** `aging_rate = 0.0` (no capacity aging) is actually the
+best-balanced point — every queue's wait is low. Raising capacity aging past ~1.0
+progressively sacrifices small/medium/large to shave capacity's wait. The
+"lowest pooled wait at 8.0" is a mirage created by capacity's job-count weight.
+
+![capacity aging — per-queue wait (who pays)](figures/capacity_aging/cross_queue_wait_aging_rate.png)
+
+### Stability note
+
+At aging_rate = 0.0 the pooled wait CV is **72 %** (p5–p95 = 52–330 h) — a
+single-seed run there would have been almost meaningless. The 10-seed ensemble is
+what makes this visible; stability improves as aging rises (CV 0.72 → 0.15).
 
 ### Figures
 
-Main effect (mean wait p95 ± 95% CI; the inverted-hump shape; CIs tighten as
-aging rises):
+Pooled main effect (mean wait p95 ± 95% CI; the inverted-hump shape):
 
 ![capacity aging — main effect](figures/capacity_aging/maineffect_size_tiers_capacity_aging_rate_wait_p95_h.png)
 
-Per-config stability (distribution of wait p95 across the 10 seeds — low-aging
-configs are wide/fragile, high-aging tight):
+Per-config stability (distribution of pooled wait p95 across the 10 seeds):
 
 ![capacity aging — box](figures/capacity_aging/box_wait_p95_h.png)
 
@@ -141,22 +161,47 @@ The score function *is* the right lever for **wait-time / fairness** tuning, whe
 
 ### Per-parameter notes
 
-- **`aging_rate` (all tiers)** — strong, **non-monotonic** effect on wait, same
-  inverted-hump shape as Study 1: **zero aging gives the lowest wait** (jobs run
-  FIFO-by-base with no churn: small=31 h, medium=41 h, large=99 h at aging 0),
-  then a *small* nonzero aging **worsens** wait to a peak (small peaks 297 h at
-  1.0, large 361 h at 2.5), after which higher aging **reduces** wait again.
-  Practical read: either no aging, or *enough* aging — a little is the worst of
-  both. Stability (CV) is worst at the low-but-nonzero peak and best at high
-  aging.
-- **`base_priority` (all tiers)** — weak effect on wait (≤64 h span), mostly
-  flat with a mild downward drift at very high values; no effect on delivery or
-  utilization. Tuning a single tier's base priority in isolation does little
-  because the *relative* ordering across tiers (and aging) dominates.
+- **`aging_rate` (all tiers)** — strong, **non-monotonic** effect on *pooled*
+  wait, same inverted-hump shape as Study 1. But the per-queue view (below) is
+  the real story.
+- **`base_priority` (all tiers)** — weak effect on pooled wait (≤64 h span); the
+  per-queue effect is a gentler version of the aging pattern.
+
+### Cross-queue analysis — the "self-help, others-pay" pattern (the key finding)
+
+Breaking wait down per queue reveals a clean, consistent mechanism across **every
+tier's aging_rate**: **raising a tier's aging_rate sharply reduces THAT queue's
+wait while raising the wait of the OTHER queues.** It's a zero-sum reallocation of
+wait-priority, at ~no change to throughput or delivery.
+
+| knob (0 → max) | its own queue's wait | the other queues' wait |
+|----------------|---------------------:|:-----------------------|
+| capacity_aging (0→8) | 53 → 40 h ↓ | small 266→489, medium 70→147, large 52→95 ↑↑ |
+| small_aging (0→8)    | **850 → 114 h ↓↓** | capacity 23→146, medium 14→136, large 17→95 ↑↑ |
+| medium_aging (0→20)  | **251 → 30 h ↓↓** | small 27→321, large 13→75 ↑↑ |
+| large_aging (0→40)   | **564 → 23 h ↓↓**  | small 50→325, medium 15→95 ↑↑ |
+
+`base_priority` shows the same self-help direction but far weaker (e.g.
+large_base 20→640: large 58→17 h, others rise only mildly). **Throughput per queue
+is essentially flat across all knobs** (large stays ~7.7 jobs/day everywhere) — so
+these are wait-*reordering* levers, not throughput/delivery levers.
+
+Example (large_aging — large-queue wait collapses 564→23 h while small/medium
+climb):
+
+![large aging — per-queue wait](figures/large_aging_rate/cross_queue_wait_aging_rate.png)
+
+**Design implication:** you cannot lower one queue's wait via its aging_rate
+without raising others'. The score function reallocates a fixed wait "budget"
+across queues; it does not reduce total contention (that's demand/capacity). At
+the historical demand level, note that **aging_rate = 0 (no aging) is often the
+most balanced setting** — nonzero aging on any single tier is what creates the
+cross-queue penalty. Choosing aging rates is therefore an explicit *fairness
+priority* decision among queues, not a free win.
 
 Reproduce (example): `python scan.py --spec experiments/small_aging_rate_sweep.yaml
 --cache data/profiles_cache.npz --out results/small_aging_rate_sweep` then
-`analyze_scan.py --objective wait_p95_h`. Per-study main-effect + box plots under
-`docs/reports/figures/<study>/`.
+`analyze_scan.py --objective wait_p95_h`. Per-study main-effect, box, and
+cross-queue plots under `docs/reports/figures/<study>/`.
 
 ---
