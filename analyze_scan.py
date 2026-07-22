@@ -49,8 +49,9 @@ def summarize(results_path: str) -> tuple[pd.DataFrame, pd.DataFrame, list]:
                                        if c.endswith(("_delivered", "_delivered_nh",
                                                       "_wait_p95", "_burn",
                                                       "_thresh_nodes"))}
-    metric_cols |= {c for c in ok.columns if c.startswith(("n_", "wait_", "big_",
-                                                           "small_", "avg_"))}
+    metric_cols |= {c for c in ok.columns if c.startswith((
+        "n_", "wait_", "big_", "small_", "avg_",
+        "q_", "prog_"))}   # per-queue / per-program breakdown cols are METRICS
     param_cols = [c for c in ok.columns if c not in meta and c not in metric_cols]
     # which metrics actually exist and are numeric
     metrics = [c for c in ok.columns
@@ -171,6 +172,58 @@ def make_plots(ok, stats, param_cols, metrics, objective, outdir):
         plt.close(fig)
 
 
+def make_cross_plots(ok, stats, param_cols, outdir):
+    """Cross-queue and cross-program tradeoff plots vs the swept parameter — the
+    'what does helping queue X do to queue Y' view. Only meaningful for a single
+    swept parameter (1-D sweep), which is our per-parameter study case."""
+    plt = _fig()
+    outdir = pathlib.Path(outdir)
+    if len(param_cols) != 1:
+        return  # cross-cut lines assume a 1-D sweep
+    pc = param_cols[0]
+    xlabel = pc.split(".")[-1]
+
+    def _series(prefix, suffix, ylabel, title, fname, logy=False):
+        cols = [c for c in ok.columns
+                if c.startswith(prefix) and c.endswith(suffix)]
+        if not cols:
+            return
+        g = ok.groupby(pc)[cols].mean()
+        fig, ax = plt.subplots(figsize=(8, 5))
+        x = np.arange(len(g))
+        for c in sorted(cols):
+            name = c[len(prefix):-len(suffix)] if suffix else c[len(prefix):]
+            ax.plot(x, g[c].values, marker="o", lw=2, label=name)
+        ax.set_xticks(x); ax.set_xticklabels([str(v) for v in g.index],
+                                             rotation=30, ha="right", fontsize=8)
+        ax.set_xlabel(xlabel); ax.set_ylabel(ylabel)
+        if logy:
+            ax.set_yscale("log")
+        ax.grid(alpha=.3); ax.legend(fontsize=8, title=None)
+        ax.set_title(title)
+        fig.tight_layout(); fig.savefig(outdir / fname, dpi=110); plt.close(fig)
+
+    # per-QUEUE wait p95 (the redistribution view)
+    _series("q_", "_wait_p95_h", "wait p95 (h)",
+            f"Per-QUEUE wait p95 vs {xlabel} (who pays when you tune this knob)",
+            f"cross_queue_wait_{xlabel}.png")
+    # per-QUEUE throughput (jobs/day)
+    _series("q_", "_throughput_jpd", "throughput (jobs/day)",
+            f"Per-QUEUE throughput vs {xlabel}",
+            f"cross_queue_throughput_{xlabel}.png")
+    # per-QUEUE delivered node-hours
+    _series("q_", "_delivered_nh", "delivered node-hours",
+            f"Per-QUEUE delivered node-hours vs {xlabel}",
+            f"cross_queue_delivered_nh_{xlabel}.png")
+    # per-PROGRAM delivered node-hours + wait
+    _series("prog_", "_delivered_nh", "delivered node-hours",
+            f"Per-PROGRAM delivered node-hours vs {xlabel}",
+            f"cross_program_delivered_nh_{xlabel}.png")
+    _series("prog_", "_wait_p95_h", "wait p95 (h)",
+            f"Per-PROGRAM wait p95 vs {xlabel}",
+            f"cross_program_wait_{xlabel}.png")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--results", required=True, help="scan results.parquet")
@@ -195,7 +248,8 @@ def main():
         print(f"\nTop configs by {obj} (mean, with stability):")
         print(top[[c for c in cols if c in top]].to_string(index=False))
     make_plots(ok, stats, param_cols, metrics, obj, outdir)
-    print(f"\nWrote config_stats.csv + plots -> {outdir}/")
+    make_cross_plots(ok, stats, param_cols, outdir)
+    print(f"\nWrote config_stats.csv + plots (incl cross-queue/program) -> {outdir}/")
 
 
 if __name__ == "__main__":

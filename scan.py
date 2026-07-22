@@ -132,6 +132,17 @@ def run_task(task: dict) -> dict:
         # share) — what the sensitivity study is ultimately about.
         for prog, nh in sched.delivered_nh.items():
             row[f"{prog}_delivered_nh"] = float(nh)
+        # Per-QUEUE and per-PROGRAM breakdowns for cross-analysis (wait, throughput,
+        # delivered node-h per queue/program) + per-PROJECT long rows.
+        bd, proj_df = M.breakdowns(jobs, sched, cfg)
+        row.update(bd)
+        if not proj_df.empty:
+            proj_df = proj_df.copy()
+            proj_df.insert(0, "seed", seed)
+            proj_df.insert(0, "config_hash", chash)
+            for kk, vv in task["label"].items():
+                proj_df[kk] = (json.dumps(vv) if isinstance(vv, (list, dict)) else vv)
+            row["_project_rows"] = proj_df.to_dict("records")
         return row
     except SaturationError as e:
         return {"config_hash": chash, "seed": seed, "status": "SATURATED",
@@ -271,12 +282,33 @@ def main():
                 print(f"  [{i}/{len(todo)}] {rate:.1f} tasks/s  ETA {eta/60:.1f} min",
                       flush=True)
 
+    # Separate per-project long rows into a companion file so the main results
+    # table stays flat/wide-but-bounded.
+    proj_records = []
+    for r in rows:
+        pr = r.pop("_project_rows", None)
+        if pr:
+            proj_records.extend(pr)
+
     new = pd.DataFrame(rows)
     if res_path.exists():
         new = pd.concat([pd.read_parquet(res_path), new], ignore_index=True)
     new.to_parquet(res_path, index=False)
     ok = (new["status"] == "OK").sum()
     print(f"\nDone. {ok}/{len(new)} OK -> {res_path} ({time.time()-t0:.0f}s)")
+
+    if proj_records:
+        proj_path = outdir / "results_projects.parquet"
+        pdf = pd.DataFrame(proj_records)
+        if proj_path.exists():
+            prev = pd.read_parquet(proj_path)
+            # drop already-present (config_hash, seed, project) to stay idempotent
+            key = ["config_hash", "seed", "project"]
+            merged = pd.concat([prev, pdf], ignore_index=True)
+            merged = merged.drop_duplicates(subset=key, keep="last")
+            pdf = merged
+        pdf.to_parquet(proj_path, index=False)
+        print(f"Per-project rows -> {proj_path} ({len(pdf)} rows)")
 
 
 if __name__ == "__main__":

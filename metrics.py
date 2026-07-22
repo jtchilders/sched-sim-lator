@@ -51,6 +51,73 @@ def _win_rt(j: Job, duration_h: float) -> float:
     return max(0.0, end - max(0.0, j.start_time_h))
 
 
+def breakdowns(jobs, sched, cfg):
+    """Per-QUEUE and per-PROGRAM breakdowns for cross-analysis, plus a per-PROJECT
+    long-format DataFrame. Returns (flat_dict, projects_df).
+
+    flat_dict keys (added to a scan row):
+      q_<tier>_wait_p50/p95/max_h, q_<tier>_started, q_<tier>_submitted,
+      q_<tier>_delivered_nh, q_<tier>_throughput_jpd
+      prog_<P>_wait_p50/p95_h, prog_<P>_started, prog_<P>_delivered_nh
+    So you can see how a knob trades wait/throughput/delivery ACROSS queues and
+    programs, not just in the pooled aggregate.
+    """
+    duration_h = cfg.run.duration_days * 24.0
+    days = max(1e-9, cfg.run.duration_days)
+    started = [j for j in jobs if j.start_time_h is not None]
+    flat = {}
+
+    def _stats(prefix, group_all, group_started):
+        n_sub = len(group_all)
+        n_st = len(group_started)
+        w = np.array([j.start_time_h - j.submit_time_h for j in group_started]) \
+            if group_started else np.array([0.0])
+        nh = sum(j.nodes * _win_rt(j, duration_h) for j in group_started)
+        completed = sum(1 for j in group_started
+                        if j.end_time_h is not None and j.end_time_h <= duration_h)
+        flat[f"{prefix}_submitted"] = n_sub
+        flat[f"{prefix}_started"] = n_st
+        flat[f"{prefix}_unstarted"] = n_sub - n_st
+        flat[f"{prefix}_delivered_nh"] = float(nh)
+        flat[f"{prefix}_throughput_jpd"] = round(completed / days, 2)
+        flat[f"{prefix}_wait_p50_h"] = round(float(np.percentile(w, 50)), 2)
+        flat[f"{prefix}_wait_p95_h"] = round(float(np.percentile(w, 95)), 2)
+        flat[f"{prefix}_wait_max_h"] = round(float(w.max()), 2)
+
+    # per queue (size tier)
+    for t in cfg.size_tiers:
+        allq = [j for j in jobs if j.size_tier == t.name]
+        stq = [j for j in started if j.size_tier == t.name]
+        _stats(f"q_{t.name}", allq, stq)
+
+    # per program
+    progs = list(sched.shares.keys()) if hasattr(sched, "shares") else \
+        sorted({j.program for j in jobs})
+    for p in progs:
+        allp = [j for j in jobs if j.program == p]
+        stp = [j for j in started if j.program == p]
+        _stats(f"prog_{p}", allp, stp)
+
+    # per project (long format) — only meaningful with the project layer
+    proj_rows = []
+    if cfg.projects.enabled and getattr(sched, "project_award_nh", None):
+        proj_prog = {}
+        for j in jobs:
+            if j.project and j.project not in proj_prog:
+                proj_prog[j.project] = j.program
+        deliv = getattr(sched, "project_delivered_nh", {})
+        award = sched.project_award_nh
+        for proj, aw in award.items():
+            d = deliv.get(proj, 0.0)
+            proj_rows.append({
+                "project": proj, "program": proj_prog.get(proj, "?"),
+                "delivered_nh": float(d), "award_nh": float(aw),
+                "pct_alloc_used": (100.0 * d / aw) if aw > 0 else float("nan"),
+            })
+    import pandas as pd
+    return flat, pd.DataFrame(proj_rows)
+
+
 def timeseries(sched: Scheduler, cfg: SimConfig) -> pd.DataFrame:
     """Tidy long-format: (t_h, metric, program|_all, value).
     Utilization is measured against PRODUCTION nodes (the accountability
