@@ -124,8 +124,14 @@ def run_task(task: dict) -> dict:
             row[k] = v
         for _, r in dt.iterrows():
             p = r["program"]
-            row[f"{p}_delivered"] = r["delivered_share"]
+            row[f"{p}_delivered"] = r["delivered_share"]      # share of delivered
             row[f"{p}_wait_p95"] = r["wait_p95_h"]
+            if "budget_burn" in r:
+                row[f"{p}_burn"] = r["budget_burn"]           # delivered/allocated
+        # Absolute per-program delivered node-hours (the DELIVERY quantity, not a
+        # share) — what the sensitivity study is ultimately about.
+        for prog, nh in sched.delivered_nh.items():
+            row[f"{prog}_delivered_nh"] = float(nh)
         return row
     except SaturationError as e:
         return {"config_hash": chash, "seed": seed, "status": "SATURATED",

@@ -1,0 +1,11 @@
+# Tiny Monte-Carlo smoke: 2 configs x 10 seeds, short window. Tests the MC
+# stability pipeline (analyze_scan) end to end.
+name: mc_smoke
+base: configs/menu_scan_base.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 10
+params:
+  scheduler.score_expr:
+    - "base + aging_rate*wait"
+    - "base + aging_rate*wait - 0.002*nodes"
