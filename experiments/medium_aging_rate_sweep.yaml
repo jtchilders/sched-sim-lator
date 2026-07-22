@@ -1,0 +1,15 @@
+# STUDY: medium-tier aging_rate sweep (score-fn parameter). One knob varied,
+# everything else fixed. Full year, projects on, Genesis off. 10 seeds/value.
+name: medium_aging_rate_sweep
+base: configs/baseline_fullyear.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 10
+params:
+  size_tiers.medium.aging_rate:
+  - 0.0
+  - 1
+  - 2.5
+  - 5
+  - 10
+  - 20

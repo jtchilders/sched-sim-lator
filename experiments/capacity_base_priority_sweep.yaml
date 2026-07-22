@@ -1,0 +1,15 @@
+# STUDY: capacity-tier base_priority sweep (score-fn parameter). One knob varied,
+# everything else fixed. Full year, projects on, Genesis off. 10 seeds/value.
+name: capacity_base_priority_sweep
+base: configs/baseline_fullyear.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 10
+params:
+  size_tiers.capacity.base_priority:
+  - 0
+  - 2.5
+  - 5
+  - 10
+  - 20
+  - 40

@@ -1,0 +1,15 @@
+# STUDY: small-tier aging_rate sweep (score-fn parameter). One knob varied,
+# everything else fixed. Full year, projects on, Genesis off. 10 seeds/value.
+name: small_aging_rate_sweep
+base: configs/baseline_fullyear.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 10
+params:
+  size_tiers.small.aging_rate:
+  - 0.0
+  - 0.5
+  - 1
+  - 2
+  - 4
+  - 8
