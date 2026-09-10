@@ -76,7 +76,7 @@ class MachineSpec:
 
 @dataclass(frozen=True)
 class PrioritySpec:
-    expr: str = "alcf_fitted"        # a CANDIDATES name or a literal expression
+    expr: str = "alcf_exact"        # a CANDIDATES name or a literal expression
     candidates: tuple = ()        # extra names/expressions to run and rank
 
 

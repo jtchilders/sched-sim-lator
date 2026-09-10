@@ -8,6 +8,6 @@ jobs:
 machine: {schedulable_nodes: auto, auto_quantile: 0.95, reservations: true}
 scheduler: {cycle_h: 0.16667, backfill_depth: 1, ordering: strict_groups, enforce_queued_limits: false}
 priority:
-  expr: alcf_fitted
-  candidates: [alcf_cubic, fifo]
+  expr: alcf_exact
+  candidates: [alcf_fitted, fifo]
 output: {dir: results/replay/aurora_2026_spring}
