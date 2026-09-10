@@ -1,0 +1,41 @@
+# Base config for queue-menu x score-function scans.
+# Program-level (projects off) for speed and clean interpretation; realistic
+# 0.6x load; 60-day window (fast, stable regime). The scan spec overrides
+# size_tiers (the menu) and scheduler.score_expr / base_priority / aging_rate.
+trace_db: /Users/jchilders/pbs_monitor_aurora.db
+
+machine:
+  total_nodes: 10624
+  production_nodes: 9600
+
+programs:
+  - {name: INCITE, target_share: 0.50, overburn: 0.25, alloc_year_start_month: 1}
+  - {name: ALCC,   target_share: 0.25, overburn: 0.0,  alloc_year_start_month: 7}
+  - {name: DD,     target_share: 0.10, overburn: 0.0,  soft_floor: true, alloc_year_start_month: 1}
+
+# Default menu (the scan overrides size_tiers with menu presets; see configs/menus.md)
+size_tiers:
+  - {name: capacity, min_nodes: 1,    max_nodes: 128,   walltime_cap_h: 168, base_priority: 5,  aging_rate: 0.5}
+  - {name: small,    min_nodes: 129,  max_nodes: 512,   walltime_cap_h: 72,  base_priority: 20, aging_rate: 2.0}
+  - {name: medium,   min_nodes: 513,  max_nodes: 2048,  walltime_cap_h: 48,  base_priority: 40, aging_rate: 5.0}
+  - {name: large,    min_nodes: 2049, max_nodes: 10624, walltime_cap_h: 24,  base_priority: 80, aging_rate: 10.0}
+
+generator:
+  load_multiplier: 0.6
+
+genesis: {enabled: false}
+projects: {enabled: false}
+deadlines: {enabled: false}
+walltime_policy: {enabled: false}   # use per-tier walltime_cap_h for menu studies
+behavior: {enabled: false}
+capacity_protection: {strategy: none}
+
+scheduler:
+  enable_backfill: true
+  policy: blind
+  score_expr: "base + aging_rate*wait"
+  reserve_min_nodes: 0        # -> capacity threshold (1920); protects large jobs
+  sched_cycle_h: 0.16667      # 600s
+
+run: {duration_days: 60, start_month: 1, sample_dt_h: 24.0, n_seeds: 1, base_seed: 42}
+output: {outdir: results/menu_base, saturation_abort_pending: 300000}

@@ -1,0 +1,15 @@
+# STUDY: medium-tier base_priority sweep (score-fn parameter). One knob varied,
+# everything else fixed. Full year, projects on, Genesis off. 10 seeds/value.
+name: medium_base_priority_sweep
+base: configs/baseline_fullyear.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 10
+params:
+  size_tiers.medium.base_priority:
+  - 10
+  - 20
+  - 40
+  - 80
+  - 160
+  - 320

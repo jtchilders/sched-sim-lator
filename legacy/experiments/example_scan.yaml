@@ -1,0 +1,14 @@
+# Example scan: score function x small-job walltime cap, a few seeds.
+# Small grid for a fast local smoke test. On Crux parton, expand params + seeds.
+name: example_scan
+base: configs/stage2_base.yaml
+cache: data/profiles_cache.npz
+method: grid
+seeds: 2
+params:
+  scheduler.score_expr:
+    - "base + aging_rate*wait"
+    - "base + aging_rate*wait + 30*(target_share-delivered_share)"
+  walltime_policy.breakpoints:
+    - [[1, 24], [512, 24], [1920, 24]]
+    - [[1, 168], [512, 48], [1920, 24]]

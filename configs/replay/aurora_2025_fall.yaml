@@ -1,0 +1,13 @@
+# Replay validation on the OLD menu (tiny queue 1-512 nodes / 6 h).
+name: aurora_2025_fall
+trace_dir: data/trace
+window: {start: "2025-10-01", end: "2025-11-15", warmup_days: 3, cooldown_h: 48}
+jobs:
+  max_run_count: 1
+  menu_queues: [small, medium, large, tiny, backfill-small, backfill-medium, backfill-large, backfill-tiny, debug, debug-scaling]
+machine: {schedulable_nodes: auto, auto_quantile: 0.95, reservations: true}
+scheduler: {cycle_h: 0.16667, backfill_depth: 1, ordering: strict_groups, enforce_queued_limits: false}
+priority:
+  expr: alcf_fitted
+  candidates: [alcf_cubic, fifo]
+output: {dir: results/replay/aurora_2025_fall}

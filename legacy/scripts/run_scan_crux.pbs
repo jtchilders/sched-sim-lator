@@ -1,0 +1,60 @@
+#!/bin/bash
+#PBS -N schedsim_scan
+#PBS -q parton
+#PBS -l select=1
+#PBS -l walltime=300
+#PBS -A Agentic-Sandbox-AI
+#PBS -l filesystems=home:eagle
+#PBS -j oe
+#
+# Batch scan on Crux `parton` (dedicated node, 128 cores).
+#
+# Runs a parameter scan defined by an experiment spec, using a compiled profile
+# cache (NOT the 9 GB trace DB — that stays on the Mac mini). Results land on
+# eagle under the Agentic-Sandbox-AI project.
+#
+# Submit with:
+#   qsub -v SPEC=experiments/foo.yaml scripts/run_scan_crux.pbs
+# (walltime/select/account/filesystems are set above; override on the qsub line
+#  if needed, e.g. -l walltime=3600.)
+#
+# Prereqs (one-time setup, see scripts/setup_crux.md):
+#   ~/schedsim/sched-sim-lator   (git clone)
+#   ~/schedsim/venv              (cray-python 3.11 venv + deps)
+#   ~/schedsim/data/profiles_cache.npz  (scp'd from Mac mini)
+
+set -euo pipefail
+
+# ---- config (override via -v on qsub) ----
+: "${SCHEDSIM_ROOT:=$HOME/schedsim}"
+: "${REPO:=$SCHEDSIM_ROOT/sched-sim-lator}"
+: "${VENV:=$SCHEDSIM_ROOT/venv}"
+: "${CACHE:=$SCHEDSIM_ROOT/data/profiles_cache.npz}"
+: "${SPEC:=experiments/example_scan.yaml}"
+: "${PROJECT_DIR:=/lus/eagle/projects/Agentic-Sandbox-AI/parton-ai/schedsim}"
+: "${WORKERS:=128}"
+
+EXP_NAME="$(basename "${SPEC%.*}")"
+OUTDIR="$PROJECT_DIR/experiments/${EXP_NAME}"
+mkdir -p "$OUTDIR"
+
+echo "=== schedsim scan on $(hostname) ==="
+echo "repo=$REPO spec=$SPEC workers=$WORKERS out=$OUTDIR"
+
+module load cray-python/3.11.7
+source "$VENV/bin/activate"
+cd "$REPO"
+
+# Stage the (tiny) profile cache to node-local /tmp so 128 workers read it from
+# local disk/memory, not Lustre. The cache is only a few MB.
+LOCAL_CACHE="/tmp/schedsim_profiles_${PBS_JOBID:-local}.npz"
+cp "$CACHE" "$LOCAL_CACHE"
+echo "staged cache -> $LOCAL_CACHE ($(du -h "$LOCAL_CACHE" | cut -f1))"
+
+# Run the scan. Idempotent: re-submitting resumes (skips completed cells), so a
+# walltime-limited job can be re-queued and continue.
+python scan.py --spec "$SPEC" --cache "$LOCAL_CACHE" \
+    --workers "$WORKERS" --out "$OUTDIR"
+
+echo "=== done; results in $OUTDIR ==="
+rm -f "$LOCAL_CACHE"

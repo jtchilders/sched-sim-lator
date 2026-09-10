@@ -1,0 +1,38 @@
+trace_db: /Users/jchilders/pbs_monitor_aurora.db
+machine:
+  total_nodes: 10624
+programs:
+- name: INCITE
+  target_share: 0.5
+  overburn: 0.25
+  alloc_year_start_month: 1
+- name: ALCC
+  target_share: 0.25
+  overburn: 0.0
+  alloc_year_start_month: 7
+- name: DD
+  target_share: 0.1
+  overburn: 0.0
+  soft_floor: true
+  alloc_year_start_month: 1
+generator:
+  min_cell_rows: 20
+  min_runtime_s: 30
+  seed: 42
+genesis:
+  enabled: false
+capacity_protection:
+  strategy: none
+scheduler:
+  enable_backfill: true
+  policy: blind
+  score_expr: base + aging_rate * wait
+run:
+  duration_days: 30
+  start_month: 1
+  sample_dt_h: 6.0
+  n_seeds: 1
+  base_seed: 42
+output:
+  outdir: results/score_sweep_base
+  saturation_abort_pending: 200000
