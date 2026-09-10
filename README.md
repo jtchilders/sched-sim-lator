@@ -47,9 +47,10 @@ Outputs per run: `REPORT.md`, `ranking.csv` (priority formulas ranked by fit),
 
 Utilisation against 9,600 reportable nodes: observed 51.2%, simulated 50.8%.
 Details, what had to be modelled to get there, and the remaining gaps are in
-`docs/VALIDATION.md`. The sort formula PBS actually uses was recovered from
-recorded job scores (`docs/PRIORITY.md`): it is quadratic in eligible time,
-linear in node count, and multiplied by project priority.
+`docs/VALIDATION.md`. The scheduler uses Aurora's exact `job_sort_formula`
+(`docs/PRIORITY.md`): quadratic in eligible time, linear in node count,
+multiplied by project priority, with walltime clamped to 6-12 h. The same form
+had been recovered independently from recorded job scores.
 
 ## Design in one paragraph
 

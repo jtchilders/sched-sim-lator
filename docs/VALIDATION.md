@@ -20,7 +20,7 @@ Each item below was found by a replay mismatch, then confirmed in the data.
 | PBS cycles are event-driven with a latency floor | debug-queue median wait 4 min at 20% load; simulated 8 min with 10-min cycles | passes on arrival/finish, cycle time ~1 s per job examined, 2.5 min dispatch latency, in-cycle rank offset |
 | Prod queues run in strict priority order | 30% of small-queue jobs waited >1 h with enough free nodes; queues carry `enable_backfill` 0 (prod) / 1 (backfill-*) | `ordering: strict_groups` = PBS strict_ordering with `backfill_depth` reservations inside the small/medium/large family |
 | Dependencies and holds delay eligibility | 15% of prod jobs carry `depend`; small-queue median wait from `etime` is 1.2 h vs 1.9 h from submit | arrival = `etime`; waits still measured from submit |
-| The sort formula is quadratic, size-linear, priority-multiplicative | fitted on recorded `job_history.score` (see PRIORITY.md) | `ALCF_FITTED` default |
+| The sort formula is quadratic, size-linear, priority-multiplicative, walltime clamped 6-12 h | fitted on recorded `job_history.score`, then confirmed by the server's `job_sort_formula` (see PRIORITY.md) | `ALCF_EXACT` default |
 | Debug runs on dedicated shared nodes | debug never exceeded 56 running nodes; real debug waits are unaffected by machine load | 64-node partition |
 | Users pace submissions under `max_queued` | per-project queued+running never exceeds 10-11 in the trace | replay does not re-apply the holdback (`enforce_queued_limits: false`); synthetic workloads must |
 
@@ -43,7 +43,15 @@ Window 2026-03-01 to 2026-04-30, 53,518 jobs, warm-up 3 days, 48 h cooldown.
 
 Utilisation vs 9,600 reportable nodes: observed 51.2%, simulated 50.8%.
 Formula ranking by fit (KS + |log2 mean ratio| over menu queues):
-`alcf_fitted` 1.19 < `fifo` 1.31 < `alcf_cubic` 1.48.
+`alcf_fitted` 1.19 ~ `alcf_exact` 1.22 < `fifo` 1.31 (the two ALCF forms are
+identical for walltimes <= 6 h, which is most jobs).
+
+**Backfill depth.** The server sets `backfill_depth = 10`, but replaying with 10
+reservations per pass under our strict-ordering semantics makes the prod
+queues far too optimistic (small mean 5.5 h, large 3.0 h vs 9.0 / 6.7 observed),
+while depth 1 gives 7.5 / 5.3. ALCF's scheduler hook is evidently stricter than
+"backfill freely around the top ten"; depth 1 remains the calibrated default
+until the hook's rule is known.
 
 ## Fall 2025 (old menu with `tiny`; no node snapshots)
 

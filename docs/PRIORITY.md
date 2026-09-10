@@ -1,4 +1,25 @@
-# Recovering ALCF's job sort formula
+# ALCF's job sort formula
+
+## The exact formula (server `qstat -Bf`, Sept 2026)
+
+```
+job_sort_formula = base_score + score_boost
+  + enable_wfp * wfp_factor * (eligible_time**2 / min(max(walltime, 21600), 43200)**3
+                               * project_priority * nodect / total_cpus)
+  + enable_backfill * min(backfill_max, eligible_time / backfill_factor)
+  + enable_fifo * eligible_time / fifo_factor
+```
+
+`eligible_time` and `walltime` are in seconds; walltime is clamped to [6 h, 12 h],
+so a job requesting <= 6 h accrues 8x faster than one requesting >= 12 h. This is
+`schedsim.priority.ALCF_EXACT`, the default. Server also reports
+`backfill_depth = 10` and `eligible_time_enable = True`.
+
+## How it was recovered before the server output was available
+
+The fit below was done from recorded scores alone and landed on the same form:
+the constant 1.2e-5 h^-2 is `1e5 / 21600**3` in hour units, and the "K drops by
+~6 for walltime > 8 h" step is the 12 h clamp, `(21600/43200)**3 = 1/8`.
 
 ALCF documents the scheduler only qualitatively (larger jobs gain priority
 faster, shorter jobs gain faster, INCITE/ALCC outrank discretionary, negative
