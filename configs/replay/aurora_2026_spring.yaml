@@ -1,0 +1,13 @@
+# Replay validation on the CURRENT menu (capacity queue live since 2026-02-16).
+name: aurora_2026_spring
+trace_dir: data/trace
+window: {start: "2026-03-01", end: "2026-04-30", warmup_days: 3, cooldown_h: 48}
+jobs:
+  max_run_count: 1
+  menu_queues: [small, medium, large, capacity, backfill-small, backfill-medium, backfill-large, debug, debug-scaling]
+machine: {schedulable_nodes: auto, auto_quantile: 0.95, reservations: true}
+scheduler: {cycle_h: 0.16667, backfill_depth: 1, ordering: strict_groups, enforce_queued_limits: false}
+priority:
+  expr: alcf_fitted
+  candidates: [alcf_cubic, fifo]
+output: {dir: results/replay/aurora_2026_spring}

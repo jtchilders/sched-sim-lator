@@ -1,0 +1,21 @@
+[project]
+name = "schedsim"
+version = "0.1.0"
+description = "Replay and Monte Carlo simulator for PBS-style scheduling on Aurora"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26", "pandas>=2.1", "pyarrow>=14.0", "pyyaml>=6.0",
+  "matplotlib>=3.8", "tabulate>=0.9",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+schedsim = "schedsim.cli:main"
+
+[tool.setuptools]
+packages = ["schedsim", "schedsim.trace"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
